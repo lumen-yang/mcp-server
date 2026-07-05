@@ -8,7 +8,7 @@ import (
 	"postgres_server/security"
 )
 
-// RegisterParameterTools 注册参数管理工具（4个：3现有迁移 + 1新增）
+// RegisterParameterTools 注册参数管理工具（5个：3现有迁移 + 2新增）
 func RegisterParameterTools(s *server.MCPServer, cred *common.Credential, g *security.Guard) {
 	// ===== 现有迁移（3个）=====
 
@@ -65,7 +65,25 @@ func RegisterParameterTools(s *server.MCPServer, cred *common.Credential, g *sec
 			return rsp.ToJsonString(), nil
 		})
 
-	// ===== 新增（1个）=====
+	// DescribeParamsEvent - 查询参数修改事件（只读，排障时追溯"谁在什么时候改了什么参数"）
+	registerTool(s, cred, g, "DescribeParamsEvent", "查询参数修改事件",
+		security.LevelNone,
+		[]mcp.ToolOption{
+			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
+		},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeParamsEventRequest()
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
+			rsp, err := client.DescribeParamsEvent(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	// ===== 新增（2个）=====
 
 	// ModifyDBInstanceParameters - 修改实例参数（L3最高级确认，高危参数如max_connections）
 	registerTool(s, cred, g, "ModifyDBInstanceParameters", "修改实例参数",
@@ -84,5 +102,5 @@ func RegisterParameterTools(s *server.MCPServer, cred *common.Credential, g *sec
 			return rsp.ToJsonString(), nil
 		})
 
-	Log("Parameter tools registered: 4")
+	Log("Parameter tools registered: 5")
 }

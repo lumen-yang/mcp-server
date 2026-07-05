@@ -126,6 +126,26 @@ func RegisterBackupTools(s *server.MCPServer, cred *common.Credential, g *securi
 			return rsp.ToJsonString(), nil
 		})
 
+	// DescribeCloneDBInstanceSpec - 查询克隆实例可购买的规格（只读，与CloneDBInstance配对使用）
+	registerTool(s, cred, g, "DescribeCloneDBInstanceSpec", "查询克隆实例可购买的规格",
+		security.LevelNone,
+		[]mcp.ToolOption{
+			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("源实例ID")),
+			mcp.WithString("BackupSetId", mcp.Description("基础备份集ID，与RecoveryTargetTime二选一，同时设置时以此参数为准")),
+			mcp.WithString("RecoveryTargetTime", mcp.Description("恢复目标时间，与BackupSetId二选一必传，东八区时间")),
+		},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeCloneDBInstanceSpecRequest()
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
+			rsp, err := client.DescribeCloneDBInstanceSpec(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
 	// DescribeBackupDownloadURL - 获取备份下载链接（L4审计，链接泄露风险）
 	registerTool(s, cred, g, "DescribeBackupDownloadURL", "获取备份下载链接",
 		security.LevelAudit,
@@ -174,26 +194,6 @@ func RegisterBackupTools(s *server.MCPServer, cred *common.Credential, g *securi
 			req := postgres.NewCloneDBInstanceRequest()
 			req.FromJsonString(marshalArgs(args))
 			rsp, err := client.CloneDBInstance(req)
-			if err != nil {
-				return "", err
-			}
-			return rsp.ToJsonString(), nil
-		})
-
-	// RestoreDBInstanceObjects - 恢复数据（L3最高级确认，覆盖数据不可逆）
-	registerTool(s, cred, g, "RestoreDBInstanceObjects", "恢复数据对象(覆盖)",
-		security.LevelCritical,
-		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("目标实例ID")),
-			mcp.WithString("BackupId", mcp.Required(), mcp.Description("备份ID")),
-			mcp.WithString("RestoreType", mcp.Required(), mcp.Description("恢复类型")),
-			mcp.WithString("DBName", mcp.Description("数据库名")),
-			mcp.WithString("TableName", mcp.Description("表名")),
-		},
-		func(client *postgres.Client, args map[string]interface{}) (string, error) {
-			req := postgres.NewRestoreDBInstanceObjectsRequest()
-			req.FromJsonString(marshalArgs(args))
-			rsp, err := client.RestoreDBInstanceObjects(req)
 			if err != nil {
 				return "", err
 			}

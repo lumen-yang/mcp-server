@@ -8,7 +8,7 @@ import (
 	"postgres_server/security"
 )
 
-// RegisterInstanceTools 注册实例相关工具（12个：2现有迁移 + 4查询 + 6管理）
+// RegisterInstanceTools 注册实例相关工具（15个：2现有迁移 + 7查询 + 6管理）
 func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *security.Guard) {
 	// ===== 现有迁移（2个）=====
 
@@ -120,6 +120,57 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 			req := postgres.NewDescribeDBVersionsRequest()
 			req.FromJsonString(marshalArgs(args))
 			rsp, err := client.DescribeDBVersions(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	// DescribeRegions - 查询售卖地域（只读，建实例前选地域）
+	registerTool(s, cred, g, "DescribeRegions", "查询售卖地域",
+		security.LevelNone,
+		[]mcp.ToolOption{},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeRegionsRequest()
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
+			rsp, err := client.DescribeRegions(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	// DescribeZones - 查询售卖可用区（只读，与DescribeRegions配对，先选地域再选可用区）
+	registerTool(s, cred, g, "DescribeZones", "查询售卖可用区",
+		security.LevelNone,
+		[]mcp.ToolOption{},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeZonesRequest()
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
+			rsp, err := client.DescribeZones(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	// DescribeProductConfig - 查询售卖规格配置（只读，一站式规格配置查询）
+	registerTool(s, cred, g, "DescribeProductConfig", "查询售卖规格配置",
+		security.LevelNone,
+		[]mcp.ToolOption{
+			mcp.WithString("Zone", mcp.Description("可用区名称")),
+			mcp.WithString("DBEngine", mcp.Description("数据库引擎，默认postgresql")),
+		},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeProductConfigRequest()
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
+			rsp, err := client.DescribeProductConfig(req)
 			if err != nil {
 				return "", err
 			}
@@ -254,5 +305,5 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 			return rsp.ToJsonString(), nil
 		})
 
-	Log("Instance tools registered: 12")
+	Log("Instance tools registered: 15")
 }

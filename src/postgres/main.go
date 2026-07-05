@@ -40,7 +40,7 @@ func main() {
 
 	if config.IsEnabled("instance") {
 		tools.RegisterInstanceTools(mcpsvr, credential, guard)
-		toolCount += 12
+		toolCount += 15
 	}
 	if config.IsEnabled("account") {
 		tools.RegisterAccountTools(mcpsvr, credential, guard)
@@ -52,7 +52,7 @@ func main() {
 	}
 	if config.IsEnabled("parameter") {
 		tools.RegisterParameterTools(mcpsvr, credential, guard)
-		toolCount += 4
+		toolCount += 5
 	}
 	if config.IsEnabled("backup") {
 		tools.RegisterBackupTools(mcpsvr, credential, guard)

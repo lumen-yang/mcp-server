@@ -107,17 +107,20 @@ func RegisterAccountTools(s *server.MCPServer, cred *common.Credential, g *secur
 			return rsp.ToJsonString(), nil
 		})
 
-	// LockAccount - 锁定账号（L2业务确认，导致应用报错）
-	registerTool(s, cred, g, "LockAccount", "锁定数据库账号",
-		security.LevelBusiness,
+	// DescribeAccountPrivileges - 查询账号权限（只读，与ModifyAccountPrivileges配对使用）
+	registerTool(s, cred, g, "DescribeAccountPrivileges", "查询数据库账号的权限信息",
+		security.LevelNone,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
-			mcp.WithString("UserName", mcp.Required(), mcp.Description("账号名")),
+			mcp.WithString("UserName", mcp.Description("账号名，可通过DescribeAccounts接口获取")),
+			mcp.WithArray("DatabaseObjectSet", mcp.Description("要查询的数据库对象信息列表，每项含ObjectType/ObjectName/DatabaseName/SchemaName/TableName")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
-			req := postgres.NewLockAccountRequest()
-			req.FromJsonString(marshalArgs(args))
-			rsp, err := client.LockAccount(req)
+			req := postgres.NewDescribeAccountPrivilegesRequest()
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
+			rsp, err := client.DescribeAccountPrivileges(req)
 			if err != nil {
 				return "", err
 			}

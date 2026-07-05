@@ -83,9 +83,21 @@ func main() {
 	out, err = call("DescribeTasks", base)
 	record("DescribeTasks", out, err)
 
+	out, err = call("DescribeRegions", noID)
+	record("DescribeRegions", out, err)
+
+	out, err = call("DescribeZones", noID)
+	record("DescribeZones", out, err)
+
+	out, err = call("DescribeProductConfig", map[string]interface{}{"region": region, "DBEngine": "postgresql"})
+	record("DescribeProductConfig", out, err)
+
 	// parameter group
 	out, err = call("DescribeDBInstanceParameters", base)
 	record("DescribeDBInstanceParameters", out, err)
+
+	out, err = call("DescribeParamsEvent", base)
+	record("DescribeParamsEvent", out, err)
 
 	out, err = call("DescribeParameterTemplates", noID)
 	record("DescribeParameterTemplates", out, err)
@@ -106,6 +118,9 @@ func main() {
 	// account
 	out, err = call("DescribeAccounts", base)
 	record("DescribeAccounts", out, err)
+
+	out, err = call("DescribeAccountPrivileges", base)
+	record("DescribeAccountPrivileges", out, err)
 
 	// network
 	out, err = call("DescribeDBInstanceSecurityGroups", base)
@@ -155,6 +170,9 @@ func main() {
 
 	out, err = call("DescribeAvailableRecoveryTime", base)
 	record("DescribeAvailableRecoveryTime", out, err)
+
+	out, err = call("DescribeCloneDBInstanceSpec", base)
+	record("DescribeCloneDBInstanceSpec", out, err)
 
 	// readonly
 	out, err = call("DescribeReadOnlyGroups", base)
