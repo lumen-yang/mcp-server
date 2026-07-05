@@ -1,0 +1,88 @@
+package tools
+
+import (
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	postgres "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/postgres/v20170312"
+	"postgres_server/security"
+)
+
+// RegisterParameterTools 注册参数管理工具（4个：3现有迁移 + 1新增）
+func RegisterParameterTools(s *server.MCPServer, cred *common.Credential, g *security.Guard) {
+	// ===== 现有迁移（3个）=====
+
+	// DescribeDBInstanceParameters - 查询实例参数（只读）
+	registerTool(s, cred, g, "DescribeDBInstanceParameters", "查询实例参数",
+		security.LevelNone,
+		[]mcp.ToolOption{
+			mcp.WithString("DBInstanceId", mcp.Description("实例ID")),
+			mcp.WithString("ParamName", mcp.Description("查询指定参数详情。为空返回全部参数")),
+		},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeDBInstanceParametersRequest()
+			req.FromJsonString(marshalArgs(args))
+			rsp, err := client.DescribeDBInstanceParameters(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	// DescribeParameterTemplates - 查询参数模板列表（只读）
+	registerTool(s, cred, g, "DescribeParameterTemplates", "查询参数模板列表",
+		security.LevelNone,
+		[]mcp.ToolOption{
+			mcp.WithArray("Filters", mcp.Description("过滤条件: TemplateName|TemplateId|DBMajorVersion|DBEngine")),
+			mcp.WithNumber("Limit", mcp.Description("每页显示数量[0,100]，默认20")),
+			mcp.WithNumber("Offset", mcp.Description("数据偏移量")),
+			mcp.WithString("OrderBy", mcp.Description("排序指标: CreateTime|TemplateName|DBMajorVersion")),
+			mcp.WithString("OrderByType", mcp.Description("排序方式: asc|desc")),
+		},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeParameterTemplatesRequest()
+			req.FromJsonString(marshalArgs(args))
+			rsp, err := client.DescribeParameterTemplates(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	// DescribeParameterTemplateAttributes - 查询参数模板详情（只读）
+	registerTool(s, cred, g, "DescribeParameterTemplateAttributes", "查询参数模板详情",
+		security.LevelNone,
+		[]mcp.ToolOption{
+			mcp.WithString("TemplateId", mcp.Required(), mcp.Description("参数模板ID")),
+		},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewDescribeParameterTemplateAttributesRequest()
+			req.FromJsonString(marshalArgs(args))
+			rsp, err := client.DescribeParameterTemplateAttributes(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	// ===== 新增（1个）=====
+
+	// ModifyDBInstanceParameters - 修改实例参数（L3最高级确认，高危参数如max_connections）
+	registerTool(s, cred, g, "ModifyDBInstanceParameters", "修改实例参数",
+		security.LevelCritical,
+		[]mcp.ToolOption{
+			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
+			mcp.WithArray("ParamList", mcp.Required(), mcp.Description("参数列表，每项含Name和Value")),
+		},
+		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			req := postgres.NewModifyDBInstanceParametersRequest()
+			req.FromJsonString(marshalArgs(args))
+			rsp, err := client.ModifyDBInstanceParameters(req)
+			if err != nil {
+				return "", err
+			}
+			return rsp.ToJsonString(), nil
+		})
+
+	Log("Parameter tools registered: 4")
+}
