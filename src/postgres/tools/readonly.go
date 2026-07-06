@@ -14,52 +14,53 @@ func RegisterReadonlyTools(s *server.MCPServer, cred *common.Credential, g *secu
 	registerTool(s, cred, g, "DescribeReadOnlyGroups", "查询只读组列表",
 		security.LevelNone,
 		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Description("主实例ID")),
-			mcp.WithString("ReadOnlyGroupId", mcp.Description("只读组ID")),
-			mcp.WithNumber("Limit", mcp.Description("每页返回数目")),
-			mcp.WithNumber("Offset", mcp.Description("数据偏移量")),
+			mcp.WithArray("Filters", mcp.Description("过滤条件，支持 db-master-instance-id|read-only-group-id；其中 db-master-instance-id 为必填项")),
+			mcp.WithNumber("PageSize", mcp.Description("每页返回数目，默认10，最大99")),
+			mcp.WithNumber("PageNumber", mcp.Description("页码，默认1")),
+			mcp.WithString("OrderBy", mcp.Description("排序字段：ROGroupId|CreateTime|Name")),
+			mcp.WithString("OrderByType", mcp.Description("排序方式：asc|desc")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
-			// 注意：DescribeReadOnlyGroups 接口没有 DBInstanceId 字段，仅支持
-			// Filters(db-master-instance-id) 过滤，当传入了 DBInstanceId（或被 guard
-			// 自动注入 scope）时，强制转换为 Filters，防止越权列出其他主实例的只读组。
-			if id, ok := args["DBInstanceId"].(string); ok && id != "" {
-				args["Filters"] = []map[string]interface{}{
-					{"Name": "db-master-instance-id", "Values": []string{id}},
-				}
-				delete(args, "DBInstanceId")
-			}
+			normalizeDescribeReadOnlyGroupsArgs(args)
 			req := postgres.NewDescribeReadOnlyGroupsRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeReadOnlyGroups(req)
 			if err != nil {
 				return "", err
-			}
-			// 兜底二次过滤：scope 之外主实例的只读组不返回给调用方
-			if g.InstanceScopeActive() && rsp.Response != nil {
-				filtered := make([]*postgres.ReadOnlyGroup, 0, len(rsp.Response.ReadOnlyGroupList))
-				for _, group := range rsp.Response.ReadOnlyGroupList {
-					if group != nil && group.MasterDBInstanceId != nil && *group.MasterDBInstanceId == g.InstanceScope {
-						filtered = append(filtered, group)
-					}
-				}
-				rsp.Response.ReadOnlyGroupList = filtered
 			}
 			return rsp.ToJsonString(), nil
 		})
 
 	// CreateReadOnlyDBInstance - 创建只读实例（L1费用确认）
+	// 兼容旧参数别名：DBInstanceId->MasterDBInstanceId、SpecName->SpecCode、InstanceName->Name。
 	registerTool(s, cred, g, "CreateReadOnlyDBInstance", "创建只读实例",
 		security.LevelFee,
 		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("主实例ID")),
-			mcp.WithString("SpecName", mcp.Required(), mcp.Description("实例规格")),
+			mcp.WithString("MasterDBInstanceId", mcp.Description("主实例ID")),
+			mcp.WithString("DBInstanceId", mcp.Description("主实例ID旧别名，兼容保留")),
+			mcp.WithString("SpecCode", mcp.Description("售卖规格码")),
+			mcp.WithString("SpecName", mcp.Description("售卖规格码旧别名，兼容保留")),
+			mcp.WithNumber("Storage", mcp.Description("实例硬盘容量(GB)")),
+			mcp.WithNumber("InstanceCount", mcp.Description("购买数量，默认1")),
+			mcp.WithNumber("Period", mcp.Description("购买时长(月)")),
 			mcp.WithString("Zone", mcp.Description("可用区")),
-			mcp.WithString("InstanceName", mcp.Description("只读实例名称")),
+			mcp.WithString("VpcId", mcp.Description("私有网络ID")),
+			mcp.WithString("SubnetId", mcp.Description("子网ID")),
+			mcp.WithString("InstanceChargeType", mcp.Description("计费类型: POSTPAID_BY_HOUR|PREPAID")),
+			mcp.WithNumber("AutoRenewFlag", mcp.Description("续费标记：0手动续费，1自动续费")),
+			mcp.WithString("Name", mcp.Description("只读实例名称")),
+			mcp.WithString("InstanceName", mcp.Description("只读实例名称旧别名，兼容保留")),
+			mcp.WithString("ReadOnlyGroupId", mcp.Description("只读组ID，可选")),
+			mcp.WithArray("SecurityGroupIds", mcp.Description("安全组ID列表")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			normalizeCreateReadOnlyDBInstanceArgs(args)
 			req := postgres.NewCreateReadOnlyDBInstanceRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.CreateReadOnlyDBInstance(req)
 			if err != nil {
 				return "", err

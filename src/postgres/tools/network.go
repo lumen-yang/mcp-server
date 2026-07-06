@@ -13,15 +13,19 @@ func RegisterNetworkTools(s *server.MCPServer, cred *common.Credential, g *secur
 	// ===== 网络组（2个）=====
 
 	// OpenDBExtranetAccess - 开启公网访问（L2业务确认，暴露公网）
+	// 注意：SDK 只认 IsIpv6（1=开通Ipv6外网,0=否，默认0），此前误写为 WanPort，
+	// 属于未知字段，会被 FromJsonString 拒绝解析导致整个请求体被吞掉，现已修正。
 	registerTool(s, cred, g, "OpenDBExtranetAccess", "开启实例公网访问",
 		security.LevelBusiness,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
-			mcp.WithNumber("WanPort", mcp.Description("公网端口")),
+			mcp.WithNumber("IsIpv6", mcp.Description("是否开通Ipv6外网，1：是，0：否，默认0")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewOpenDBExtranetAccessRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.OpenDBExtranetAccess(req)
 			if err != nil {
 				return "", err
@@ -34,10 +38,13 @@ func RegisterNetworkTools(s *server.MCPServer, cred *common.Credential, g *secur
 		security.LevelBusiness,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
+			mcp.WithNumber("IsIpv6", mcp.Description("是否关闭Ipv6外网，1：是，0：否，默认0")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewCloseDBExtranetAccessRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.CloseDBExtranetAccess(req)
 			if err != nil {
 				return "", err
@@ -55,7 +62,9 @@ func RegisterNetworkTools(s *server.MCPServer, cred *common.Credential, g *secur
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewDescribeDBInstanceSecurityGroupsRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeDBInstanceSecurityGroups(req)
 			if err != nil {
 				return "", err
@@ -64,15 +73,21 @@ func RegisterNetworkTools(s *server.MCPServer, cred *common.Credential, g *secur
 		})
 
 	// ModifyDBInstanceSecurityGroups - 修改实例安全组（L2业务确认，误改断连）
+	// 注意：SDK 字段名是 SecurityGroupIdSet，此前误写为 SecurityGroupIds 会导致
+	// FromJsonString 直接报 unknown keys。这里保留旧别名兼容，统一转换后再下发。
 	registerTool(s, cred, g, "ModifyDBInstanceSecurityGroups", "修改实例安全组",
 		security.LevelBusiness,
 		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
-			mcp.WithArray("SecurityGroupIds", mcp.Required(), mcp.Description("安全组ID列表")),
+			mcp.WithString("DBInstanceId", mcp.Description("实例ID，与 ReadOnlyGroupId 二选一")),
+			mcp.WithString("ReadOnlyGroupId", mcp.Description("只读组ID，与 DBInstanceId 二选一")),
+			mcp.WithArray("SecurityGroupIdSet", mcp.Required(), mcp.Description("安全组ID全量列表")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			normalizeModifyDBInstanceSecurityGroupsArgs(args)
 			req := postgres.NewModifyDBInstanceSecurityGroupsRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.ModifyDBInstanceSecurityGroups(req)
 			if err != nil {
 				return "", err

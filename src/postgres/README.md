@@ -80,18 +80,15 @@ b、地域列表的映射关系：
 ```
 GUARD_PROFILE=test     # 默认环境；可切换为 dev / prod，留空则使用不带前缀的全局变量（兼容旧配置）
 
-# test 画像（默认）：锁定到指定实例/地域，防止误操作生产资源
+# test 画像（默认）：锁定到指定地域，防止误操作到其他地域资源
 GUARD_TEST_SCOPE_ENABLED=true
-GUARD_TEST_INSTANCE_SCOPE=postgres-xxxxxxxx
 GUARD_TEST_REGION_SCOPE=ap-guangzhou
 
-# dev 画像：不限定 region/instance，方便本地全量测试
+# dev 画像：不限定地域，方便本地全量测试
 GUARD_DEV_SCOPE_ENABLED=false
 ```
 
-支持的画像变量：`READ_ONLY`、`SCOPE_ENABLED`、`INSTANCE_SCOPE`、`REGION_SCOPE`，均可加 `GUARD_<PROFILE>_` 前缀（`PROFILE` 自动转大写）。未加前缀的画像专属变量未设置时，会回退到不带前缀的全局同名变量。
-
-实例范围限制（`INSTANCE_SCOPE`）只会对本身声明了 `DBInstanceId` 参数的工具生效，不会影响 `DescribeClasses`、`DescribeDBVersions` 等全局目录查询类工具。
+支持的画像变量：`READ_ONLY`、`SCOPE_ENABLED`、`REGION_SCOPE`，均可加 `GUARD_<PROFILE>_` 前缀（`PROFILE` 自动转大写）。未加前缀的画像专属变量未设置时，会回退到不带前缀的全局同名变量。
 
 ## API使用参考
 

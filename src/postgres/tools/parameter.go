@@ -90,11 +90,14 @@ func RegisterParameterTools(s *server.MCPServer, cred *common.Credential, g *sec
 		security.LevelCritical,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
-			mcp.WithArray("ParamList", mcp.Required(), mcp.Description("参数列表，每项含Name和Value")),
+			mcp.WithArray("ParamList", mcp.Required(), mcp.Description("参数列表，每项含 Name 和 ExpectedValue；也兼容更直观的 Value 写法")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			normalizeModifyDBInstanceParametersArgs(args)
 			req := postgres.NewModifyDBInstanceParametersRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.ModifyDBInstanceParameters(req)
 			if err != nil {
 				return "", err

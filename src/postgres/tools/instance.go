@@ -63,31 +63,14 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 			mcp.WithString("OrderByType", mcp.Description("排序方式: asc|desc")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
-			// 注意：DescribeDBInstances 接口没有 DBInstanceId 字段，仅支持 Filters 过滤，
-			// 当设置了 InstanceScope 时，强制用 db-instance-id 过滤条件覆盖用户传入的 Filters，
-			// 防止越权列出 scope 之外的实例。
-			if g.InstanceScopeActive() {
-				args["Filters"] = []map[string]interface{}{
-					{"Name": "db-instance-id", "Values": []string{g.InstanceScope}},
-				}
-			}
+			normalizeDescribeDBInstancesArgs(args)
 			req := postgres.NewDescribeDBInstancesRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeDBInstances(req)
 			if err != nil {
 				return "", err
-			}
-			// 兜底二次过滤：即使服务端 Filters 未生效，也不把 scope 之外的实例返回给调用方
-			if g.InstanceScopeActive() && rsp.Response != nil {
-				filtered := make([]*postgres.DBInstance, 0, len(rsp.Response.DBInstanceSet))
-				for _, inst := range rsp.Response.DBInstanceSet {
-					if inst != nil && inst.DBInstanceId != nil && *inst.DBInstanceId == g.InstanceScope {
-						filtered = append(filtered, inst)
-					}
-				}
-				rsp.Response.DBInstanceSet = filtered
-				total := uint64(len(filtered))
-				rsp.Response.TotalCount = &total
 			}
 			return rsp.ToJsonString(), nil
 		})
@@ -113,12 +96,13 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 	// DescribeDBVersions - 查询可用数据库版本
 	registerTool(s, cred, g, "DescribeDBVersions", "查询可用数据库版本",
 		security.LevelNone,
-		[]mcp.ToolOption{
-			mcp.WithString("DBEngine", mcp.Description("数据库引擎，默认postgresql")),
-		},
+		[]mcp.ToolOption{},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			normalizeDescribeDBVersionsArgs(args)
 			req := postgres.NewDescribeDBVersionsRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeDBVersions(req)
 			if err != nil {
 				return "", err
@@ -198,22 +182,34 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 	// ===== 实例管理组（6个，写操作需guard）=====
 
 	// CreateInstances - 创建实例（L1费用确认）
+	// 兼容旧参数别名：InstanceSpec->SpecCode、Volume->Storage、DBCharset->Charset、InstanceName->Name。
 	registerTool(s, cred, g, "CreateInstances", "创建实例",
 		security.LevelFee,
 		[]mcp.ToolOption{
 			mcp.WithString("Zone", mcp.Required(), mcp.Description("可用区ID")),
-			mcp.WithString("DBVersion", mcp.Description("数据库版本")),
-			mcp.WithString("InstanceSpec", mcp.Description("实例规格")),
-			mcp.WithString("InstanceName", mcp.Description("实例名称")),
-			mcp.WithNumber("Volume", mcp.Description("磁盘容量(GB)")),
-			mcp.WithNumber("Memory", mcp.Description("内存(GB)")),
-			mcp.WithString("DBCharset", mcp.Description("数据库字符集")),
-			mcp.WithString("InstanceChargeType", mcp.Description("计费类型: POSTPAID_BY_HOUR|PREPAID")),
+			mcp.WithString("SpecCode", mcp.Description("售卖规格码，可由 DescribeClasses 获取")),
+			mcp.WithNumber("Storage", mcp.Description("实例磁盘容量(GB)")),
+			mcp.WithNumber("InstanceCount", mcp.Description("购买实例数量，默认1")),
 			mcp.WithNumber("Period", mcp.Description("购买时长(月)")),
+			mcp.WithString("Charset", mcp.Description("数据库字符集，如 UTF8")),
+			mcp.WithString("AdminName", mcp.Description("实例管理员账号")),
+			mcp.WithString("AdminPassword", mcp.Description("实例管理员密码")),
+			mcp.WithString("DBMajorVersion", mcp.Description("PostgreSQL 大版本号，如 18")),
+			mcp.WithString("DBVersion", mcp.Description("社区版本号，可选")),
+			mcp.WithString("DBKernelVersion", mcp.Description("内核版本号，可选")),
+			mcp.WithString("InstanceChargeType", mcp.Description("计费类型: POSTPAID_BY_HOUR|PREPAID")),
+			mcp.WithString("VpcId", mcp.Description("私有网络ID")),
+			mcp.WithString("SubnetId", mcp.Description("子网ID")),
+			mcp.WithNumber("AutoRenewFlag", mcp.Description("续费标记：0手动续费，1自动续费")),
+			mcp.WithString("Name", mcp.Description("实例名称")),
+			mcp.WithArray("SecurityGroupIds", mcp.Description("安全组ID列表")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			normalizeCreateInstancesArgs(args)
 			req := postgres.NewCreateInstancesRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.CreateInstances(req)
 			if err != nil {
 				return "", err
@@ -230,7 +226,9 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewModifyDBInstanceNameRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.ModifyDBInstanceName(req)
 			if err != nil {
 				return "", err
@@ -239,17 +237,30 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 		})
 
 	// ModifyDBInstanceSpec - 变更实例规格（L1费用确认）
+	// 兼容旧参数别名 Volume->Storage。
 	registerTool(s, cred, g, "ModifyDBInstanceSpec", "变更实例规格(扩缩容)",
 		security.LevelFee,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
-			mcp.WithNumber("Memory", mcp.Description("内存(GB)")),
-			mcp.WithNumber("Volume", mcp.Description("磁盘容量(GB)")),
-			mcp.WithString("InstanceType", mcp.Description("实例类型")),
+			mcp.WithNumber("Memory", mcp.Description("修改后的内存(GiB)")),
+			mcp.WithNumber("Storage", mcp.Description("修改后的磁盘(GiB)")),
+			mcp.WithNumber("Cpu", mcp.Description("修改后的 CPU 核数，可选")),
+			mcp.WithNumber("SwitchTag", mcp.Description("切换时间选项：0立即切换，1指定时间，2维护窗口")),
+			mcp.WithString("SwitchStartTime", mcp.Description("切换开始时间，HH:MM:SS")),
+			mcp.WithString("SwitchEndTime", mcp.Description("切换截止时间，HH:MM:SS")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			if _, ok := args["Storage"]; !ok {
+				if legacy, ok := args["Volume"]; ok {
+					args["Storage"] = legacy
+					delete(args, "Volume")
+				}
+			}
+			delete(args, "InstanceType")
 			req := postgres.NewModifyDBInstanceSpecRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.ModifyDBInstanceSpec(req)
 			if err != nil {
 				return "", err
@@ -265,7 +276,9 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewRestartDBInstanceRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.RestartDBInstance(req)
 			if err != nil {
 				return "", err
@@ -274,14 +287,24 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 		})
 
 	// IsolateDBInstances - 隔离实例（L2业务确认）
+	// SDK 需要 DBInstanceIdSet；为兼容易用性保留 DBInstanceId 单实例别名。
 	registerTool(s, cred, g, "IsolateDBInstances", "隔离实例",
 		security.LevelBusiness,
 		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
+			mcp.WithString("DBInstanceId", mcp.Description("单实例ID，和 DBInstanceIdSet 二选一")),
+			mcp.WithArray("DBInstanceIdSet", mcp.Description("实例ID数组，建议只传一个")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			if _, ok := args["DBInstanceIdSet"]; !ok {
+				if id, ok := args["DBInstanceId"].(string); ok && id != "" {
+					args["DBInstanceIdSet"] = []string{id}
+				}
+			}
+			delete(args, "DBInstanceId")
 			req := postgres.NewIsolateDBInstancesRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.IsolateDBInstances(req)
 			if err != nil {
 				return "", err
@@ -290,14 +313,27 @@ func RegisterInstanceTools(s *server.MCPServer, cred *common.Credential, g *secu
 		})
 
 	// DisIsolateDBInstances - 解除隔离（L4审计）
+	// SDK 需要 DBInstanceIdSet；为兼容易用性保留 DBInstanceId 单实例别名。
 	registerTool(s, cred, g, "DisIsolateDBInstances", "解除隔离实例",
 		security.LevelAudit,
 		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
+			mcp.WithString("DBInstanceId", mcp.Description("单实例ID，和 DBInstanceIdSet 二选一")),
+			mcp.WithArray("DBInstanceIdSet", mcp.Description("实例ID数组，建议只传一个")),
+			mcp.WithNumber("Period", mcp.Description("购买时长(月)，预付费实例可用")),
+			mcp.WithBoolean("AutoVoucher", mcp.Description("是否自动使用代金券")),
+			mcp.WithArray("VoucherIds", mcp.Description("代金券ID列表")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			if _, ok := args["DBInstanceIdSet"]; !ok {
+				if id, ok := args["DBInstanceId"].(string); ok && id != "" {
+					args["DBInstanceIdSet"] = []string{id}
+				}
+			}
+			delete(args, "DBInstanceId")
 			req := postgres.NewDisIsolateDBInstancesRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DisIsolateDBInstances(req)
 			if err != nil {
 				return "", err

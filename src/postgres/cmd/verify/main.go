@@ -74,7 +74,8 @@ func main() {
 	out, err = call("DescribeDBInstances", noID)
 	record("DescribeDBInstances", out, err)
 
-	out, err = call("DescribeClasses", map[string]interface{}{"region": region, "DBEngine": "postgresql"})
+	// Zone、DBMajorVersion 均为必填参数，用当前实例所在可用区及主版本号（见 DescribeDBInstanceAttribute 结果）
+	out, err = call("DescribeClasses", map[string]interface{}{"region": region, "Zone": "ap-chengdu-1", "DBEngine": "postgresql", "DBMajorVersion": "18"})
 	record("DescribeClasses", out, err)
 
 	out, err = call("DescribeDBVersions", noID)
@@ -118,8 +119,20 @@ func main() {
 	// account
 	out, err = call("DescribeAccounts", base)
 	record("DescribeAccounts", out, err)
+	userName := extractFirst(out, "UserName")
+	if userName == "" {
+		userName = "postgres"
+	}
 
-	out, err = call("DescribeAccountPrivileges", base)
+	// UserName + DatabaseObjectSet 均为查询权限的必填参数
+	out, err = call("DescribeAccountPrivileges", map[string]interface{}{
+		"region":       region,
+		"DBInstanceId": instanceID,
+		"UserName":     userName,
+		"DatabaseObjectSet": []map[string]interface{}{
+			{"ObjectType": "database", "ObjectName": "postgres"},
+		},
+	})
 	record("DescribeAccountPrivileges", out, err)
 
 	// network
@@ -159,19 +172,34 @@ func main() {
 	record("DescribeDatabaseObjects", out, err)
 
 	// backup
-	out, err = call("DescribeBackupOverview", base)
+	out, err = call("DescribeBackupOverview", noID)
 	record("DescribeBackupOverview", out, err)
 
-	out, err = call("DescribeBaseBackups", base)
+	backupQuery := map[string]interface{}{
+		"region": region,
+		"Filters": []map[string]interface{}{
+			{"Name": "db-instance-id", "Values": []string{instanceID}},
+		},
+		"Limit": 20,
+	}
+	out, err = call("DescribeBaseBackups", backupQuery)
 	record("DescribeBaseBackups", out, err)
+	backupSetId := extractFirst(out, "Id")
 
-	out, err = call("DescribeLogBackups", base)
+	out, err = call("DescribeLogBackups", backupQuery)
 	record("DescribeLogBackups", out, err)
 
 	out, err = call("DescribeAvailableRecoveryTime", base)
 	record("DescribeAvailableRecoveryTime", out, err)
 
-	out, err = call("DescribeCloneDBInstanceSpec", base)
+	// BackupSetId 与 RecoveryTargetTime 必须二选一传入，这里优先用真实的基础备份集ID
+	cloneArgs := map[string]interface{}{"region": region, "DBInstanceId": instanceID}
+	if backupSetId != "" {
+		cloneArgs["BackupSetId"] = backupSetId
+	} else {
+		cloneArgs["RecoveryTargetTime"] = time.Now().Add(-1 * time.Hour).Format("2006-01-02 15:04:05")
+	}
+	out, err = call("DescribeCloneDBInstanceSpec", cloneArgs)
 	record("DescribeCloneDBInstanceSpec", out, err)
 
 	// readonly

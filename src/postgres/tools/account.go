@@ -35,17 +35,24 @@ func RegisterAccountTools(s *server.MCPServer, cred *common.Credential, g *secur
 	// ===== 新增（5个）=====
 
 	// CreateAccount - 创建账号（L4审计）
+	// 注意1：SDK 字段名是 Remark（无 s），此前误写为 Remarks，属于未知字段，
+	// 会被 FromJsonString 拒绝解析导致整个请求体被吞掉，现已修正。
+	// 注意2：模型注释未标注 Type 必填，但实测该接口会返回
+	// MissingParameter: 请求缺少必传参数 `Type`，故将其标为必填参数，避免误导调用方。
 	registerTool(s, cred, g, "CreateAccount", "创建数据库账号",
 		security.LevelAudit,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
 			mcp.WithString("UserName", mcp.Required(), mcp.Description("账号名")),
 			mcp.WithString("Password", mcp.Required(), mcp.Description("账号密码")),
-			mcp.WithString("Remarks", mcp.Description("备注")),
+			mcp.WithString("Type", mcp.Required(), mcp.Description("账号类型：normal普通用户|tencentDBSuper超级用户")),
+			mcp.WithString("Remark", mcp.Description("备注")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewCreateAccountRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.CreateAccount(req)
 			if err != nil {
 				return "", err
@@ -71,17 +78,34 @@ func RegisterAccountTools(s *server.MCPServer, cred *common.Credential, g *secur
 		})
 
 	// ModifyAccountPrivileges - 修改账号权限（L4审计，提权审计）
-	registerTool(s, cred, g, "ModifyAccountPrivileges", "修改账号权限",
+	// 注意：腾讯云 API 的 ModifyAccountPrivileges 只接受 DBInstanceId/UserName/ModifyPrivilegeSet
+	// 三个顶层字段（SDK FromJsonString 对未知顶层字段会直接报错拒绝解析），不存在 DBName/Privileges
+	// 这种扁平字符串参数。ModifyPrivilegeSet 是嵌套结构，每项形如：
+	//   {
+	//     "DatabasePrivilege": {
+	//       "Object": {"ObjectType":"database|schema|table|...","ObjectName":"...","DatabaseName":"...","SchemaName":"...","TableName":"..."},
+	//       "PrivilegeSet": ["SELECT","INSERT",...]
+	//     },
+	//     "ModifyType": "grantObject|revokeObject|alterRole",
+	//     "IsCascade": false
+	//   }
+	// 调用方需按此嵌套结构直接传入 ModifyPrivilegeSet 数组（与 ModifyDBInstanceParameters 的
+	// ParamList 用法一致，工具层不做字段名转换）。
+	registerTool(s, cred, g, "ModifyAccountPrivileges", "修改账号权限（授权/收回/修改账号类型）",
 		security.LevelAudit,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
-			mcp.WithString("UserName", mcp.Required(), mcp.Description("账号名")),
-			mcp.WithString("DBName", mcp.Required(), mcp.Description("数据库名")),
-			mcp.WithString("Privileges", mcp.Required(), mcp.Description("权限: rw|r|ddl|owner")),
+			mcp.WithString("UserName", mcp.Required(), mcp.Description("账号名，可通过DescribeAccounts接口获取")),
+			mcp.WithArray("ModifyPrivilegeSet", mcp.Required(), mcp.Description(
+				"修改的权限信息数组，一次最高修改50条。每项结构："+
+					"{DatabasePrivilege:{Object:{ObjectType(database|schema|table|...),ObjectName(必填,nullable为false),DatabaseName,SchemaName,TableName},PrivilegeSet:[权限字符串数组]},"+
+					"ModifyType(grantObject授权|revokeObject收回|alterRole修改账号类型),IsCascade(仅revokeObject时可用，是否级联撤销，默认false)}")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewModifyAccountPrivilegesRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.ModifyAccountPrivileges(req)
 			if err != nil {
 				return "", err

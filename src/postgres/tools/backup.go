@@ -15,12 +15,13 @@ func RegisterBackupTools(s *server.MCPServer, cred *common.Credential, g *securi
 	// DescribeBackupOverview - 查询备份概览（只读）
 	registerTool(s, cred, g, "DescribeBackupOverview", "查询备份概览",
 		security.LevelNone,
-		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
-		},
+		[]mcp.ToolOption{},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			normalizeDescribeBackupOverviewArgs(args)
 			req := postgres.NewDescribeBackupOverviewRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeBackupOverview(req)
 			if err != nil {
 				return "", err
@@ -32,39 +33,23 @@ func RegisterBackupTools(s *server.MCPServer, cred *common.Credential, g *securi
 	registerTool(s, cred, g, "DescribeBaseBackups", "查询基础备份列表",
 		security.LevelNone,
 		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Description("实例ID")),
-			mcp.WithString("StartTime", mcp.Description("开始时间")),
-			mcp.WithString("EndTime", mcp.Description("结束时间")),
+			mcp.WithString("MinFinishTime", mcp.Description("备份最小结束时间，形如 2018-01-01 00:00:00")),
+			mcp.WithString("MaxFinishTime", mcp.Description("备份最大结束时间，形如 2018-01-01 00:00:00")),
+			mcp.WithArray("Filters", mcp.Description("过滤条件，支持 db-instance-id|db-instance-name|db-instance-ip|base-backup-id|db-instance-status")),
 			mcp.WithNumber("Limit", mcp.Description("每页返回数目")),
 			mcp.WithNumber("Offset", mcp.Description("数据偏移量")),
+			mcp.WithString("OrderBy", mcp.Description("排序字段：StartTime|FinishTime|Size")),
+			mcp.WithString("OrderByType", mcp.Description("排序方式：asc|desc")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
-			// 注意：DescribeBaseBackups 接口没有 DBInstanceId 字段，仅支持 Filters 过滤，
-			// 当设置了 InstanceScope 时，强制用 db-instance-id 过滤条件覆盖调用参数，
-			// 防止越权列出 scope 之外其他实例的备份信息。
-			if id, ok := args["DBInstanceId"].(string); ok && id != "" {
-				args["Filters"] = []map[string]interface{}{
-					{"Name": "db-instance-id", "Values": []string{id}},
-				}
-				delete(args, "DBInstanceId")
-			}
+			normalizeBackupListArgs(args)
 			req := postgres.NewDescribeBaseBackupsRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeBaseBackups(req)
 			if err != nil {
 				return "", err
-			}
-			// 兜底二次过滤：scope 之外的备份记录不返回给调用方
-			if g.InstanceScopeActive() && rsp.Response != nil {
-				filtered := make([]*postgres.BaseBackup, 0, len(rsp.Response.BaseBackupSet))
-				for _, b := range rsp.Response.BaseBackupSet {
-					if b != nil && b.DBInstanceId != nil && *b.DBInstanceId == g.InstanceScope {
-						filtered = append(filtered, b)
-					}
-				}
-				rsp.Response.BaseBackupSet = filtered
-				total := uint64(len(filtered))
-				rsp.Response.TotalCount = &total
 			}
 			return rsp.ToJsonString(), nil
 		})
@@ -73,39 +58,23 @@ func RegisterBackupTools(s *server.MCPServer, cred *common.Credential, g *securi
 	registerTool(s, cred, g, "DescribeLogBackups", "查询日志备份列表",
 		security.LevelNone,
 		[]mcp.ToolOption{
-			mcp.WithString("DBInstanceId", mcp.Description("实例ID")),
-			mcp.WithString("StartTime", mcp.Description("开始时间")),
-			mcp.WithString("EndTime", mcp.Description("结束时间")),
+			mcp.WithString("MinFinishTime", mcp.Description("备份最小结束时间，形如 2018-01-01 00:00:00")),
+			mcp.WithString("MaxFinishTime", mcp.Description("备份最大结束时间，形如 2018-01-01 00:00:00")),
+			mcp.WithArray("Filters", mcp.Description("过滤条件，支持 db-instance-id|db-instance-name|db-instance-ip|db-instance-status")),
 			mcp.WithNumber("Limit", mcp.Description("每页返回数目")),
 			mcp.WithNumber("Offset", mcp.Description("数据偏移量")),
+			mcp.WithString("OrderBy", mcp.Description("排序字段：StartTime|FinishTime|Size")),
+			mcp.WithString("OrderByType", mcp.Description("排序方式：asc|desc")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
-			// 注意：DescribeLogBackups 接口没有 DBInstanceId 字段，仅支持 Filters 过滤，
-			// 当设置了 InstanceScope 时，强制用 db-instance-id 过滤条件覆盖调用参数，
-			// 防止越权列出 scope 之外其他实例的备份信息。
-			if id, ok := args["DBInstanceId"].(string); ok && id != "" {
-				args["Filters"] = []map[string]interface{}{
-					{"Name": "db-instance-id", "Values": []string{id}},
-				}
-				delete(args, "DBInstanceId")
-			}
+			normalizeBackupListArgs(args)
 			req := postgres.NewDescribeLogBackupsRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeLogBackups(req)
 			if err != nil {
 				return "", err
-			}
-			// 兜底二次过滤：scope 之外的备份记录不返回给调用方
-			if g.InstanceScopeActive() && rsp.Response != nil {
-				filtered := make([]*postgres.LogBackup, 0, len(rsp.Response.LogBackupSet))
-				for _, b := range rsp.Response.LogBackupSet {
-					if b != nil && b.DBInstanceId != nil && *b.DBInstanceId == g.InstanceScope {
-						filtered = append(filtered, b)
-					}
-				}
-				rsp.Response.LogBackupSet = filtered
-				total := uint64(len(filtered))
-				rsp.Response.TotalCount = &total
 			}
 			return rsp.ToJsonString(), nil
 		})
@@ -147,15 +116,22 @@ func RegisterBackupTools(s *server.MCPServer, cred *common.Credential, g *securi
 		})
 
 	// DescribeBackupDownloadURL - 获取备份下载链接（L4审计，链接泄露风险）
+	// 注意：此前缺少必传参数 BackupType（SDK 要求 LogBackup|BaseBackup），
+	// 实测会返回 MissingParameter: 请求缺少必传参数 `BackupType`，现补上；
+	// 同时补上缺失的 FromJsonString error 检查。
 	registerTool(s, cred, g, "DescribeBackupDownloadURL", "获取备份下载链接",
 		security.LevelAudit,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("实例ID")),
+			mcp.WithString("BackupType", mcp.Required(), mcp.Description("备份类型：LogBackup日志备份|BaseBackup基础备份")),
 			mcp.WithString("BackupId", mcp.Required(), mcp.Description("备份ID")),
+			mcp.WithNumber("URLExpireTime", mcp.Description("链接有效时间(小时)，取值[0,36]，默认12")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
 			req := postgres.NewDescribeBackupDownloadURLRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.DescribeBackupDownloadURL(req)
 			if err != nil {
 				return "", err
@@ -182,17 +158,43 @@ func RegisterBackupTools(s *server.MCPServer, cred *common.Credential, g *securi
 		})
 
 	// CloneDBInstance - 克隆实例（L1费用确认）
+	// 兼容旧参数别名：SpecName->SpecCode、InstanceName->Name。
 	registerTool(s, cred, g, "CloneDBInstance", "克隆实例",
 		security.LevelFee,
 		[]mcp.ToolOption{
 			mcp.WithString("DBInstanceId", mcp.Required(), mcp.Description("源实例ID")),
-			mcp.WithString("SpecName", mcp.Description("克隆实例规格")),
-			mcp.WithString("Zone", mcp.Description("可用区")),
-			mcp.WithString("InstanceName", mcp.Description("克隆实例名称")),
+			mcp.WithString("SpecCode", mcp.Description("售卖规格码")),
+			mcp.WithNumber("Storage", mcp.Description("实例容量大小(GB)")),
+			mcp.WithNumber("Period", mcp.Description("购买时长(月)")),
+			mcp.WithNumber("AutoRenewFlag", mcp.Description("续费标记：0手动，1自动")),
+			mcp.WithString("VpcId", mcp.Description("私有网络ID")),
+			mcp.WithString("SubnetId", mcp.Description("子网ID")),
+			mcp.WithString("Name", mcp.Description("克隆实例名称")),
+			mcp.WithString("InstanceChargeType", mcp.Description("计费类型: POSTPAID_BY_HOUR|PREPAID")),
+			mcp.WithArray("SecurityGroupIds", mcp.Description("安全组ID列表")),
+			mcp.WithArray("DBNodeSet", mcp.Description("实例节点部署信息，每项含 Role(Primary/Standby) 与 Zone")),
+			mcp.WithNumber("ProjectId", mcp.Description("项目ID")),
+			mcp.WithString("BackupSetId", mcp.Description("基础备份集ID，与 RecoveryTargetTime 二选一")),
+			mcp.WithString("RecoveryTargetTime", mcp.Description("恢复时间点，与 BackupSetId 二选一")),
 		},
 		func(client *postgres.Client, args map[string]interface{}) (string, error) {
+			if _, ok := args["SpecCode"]; !ok {
+				if legacy, ok := args["SpecName"]; ok {
+					args["SpecCode"] = legacy
+					delete(args, "SpecName")
+				}
+			}
+			if _, ok := args["Name"]; !ok {
+				if legacy, ok := args["InstanceName"]; ok {
+					args["Name"] = legacy
+					delete(args, "InstanceName")
+				}
+			}
+			delete(args, "Zone")
 			req := postgres.NewCloneDBInstanceRequest()
-			req.FromJsonString(marshalArgs(args))
+			if err := req.FromJsonString(marshalArgs(args)); err != nil {
+				return "", err
+			}
 			rsp, err := client.CloneDBInstance(req)
 			if err != nil {
 				return "", err

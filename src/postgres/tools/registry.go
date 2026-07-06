@@ -53,11 +53,6 @@ func registerTool(
 
 	tool := mcp.NewTool("postgres-"+name, toolOpts...)
 
-	// 该工具是否本身声明了 DBInstanceId 参数：只有声明了此参数的工具，
-	// 才允许 guard 在未显式传参时自动注入 scope 限定的实例ID，避免向
-	// 不认识该字段的 SDK 请求结构体（如查规格/查版本等全局目录查询）盲注入。
-	_, hasInstanceIdField := tool.InputSchema.Properties["DBInstanceId"]
-
 	s.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// 1. 提取 region（默认 ap-guangzhou）
 		region := "ap-guangzhou"
@@ -67,25 +62,28 @@ func registerTool(
 		}
 		delete(arguments, "region")
 
-		// 2. Guard 校验（只读模式/资源 scoping）
+		// 2. Guard 校验（只读模式/地域 scoping）
 		if g != nil {
-			if err := g.Check(name, region, arguments, guardLevel, hasInstanceIdField); err != nil {
+			if err := g.Check(name, region, guardLevel); err != nil {
 				return mcp.NewToolResultText(fmt.Sprintf(`{"code":403,"error":"%s"}`, err.Error())), nil
 			}
 		}
 
 		// 3. 确认检查（写操作需要 confirm=true）
-		if security.NeedsConfirm(guardLevel) {
-			confirmed := false
-			if v, ok := arguments["confirm"].(bool); ok {
-				confirmed = v
-			}
-			delete(arguments, "confirm")
+		// 注意：confirm 无论该工具是否需要确认，都必须从 arguments 中删除——
+		// 否则调用方（或未来的调用者）主动传入的 confirm 字段会被 marshalArgs
+		// 带入 SDK 请求体，SDK 的 FromJsonString 遇到未知字段会直接报错拒绝解析，
+		// 导致整个请求体被静默清空（req 里所有字段都是零值），进而报出
+		// "缺少必传参数 XXX" 这种误导性错误（实际上参数都传了，只是被吞掉）。
+		confirmed := false
+		if v, ok := arguments["confirm"].(bool); ok {
+			confirmed = v
+		}
+		delete(arguments, "confirm")
 
-			if !confirmed {
-				warning := security.GetGuardWarning(guardLevel, name)
-				return mcp.NewToolResultText(fmt.Sprintf(`{"code":403,"warning":"%s","require_confirm":true}`, warning)), nil
-			}
+		if security.NeedsConfirm(guardLevel) && !confirmed {
+			warning := security.GetGuardWarning(guardLevel, name)
+			return mcp.NewToolResultText(fmt.Sprintf(`{"code":403,"warning":"%s","require_confirm":true}`, warning)), nil
 		}
 
 		// 4. 创建 postgres client
