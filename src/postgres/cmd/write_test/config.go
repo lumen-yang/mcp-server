@@ -8,9 +8,9 @@ import (
 )
 
 type TestPlan struct {
-	Server  ServerConfig         `yaml:"server"`
-	Target  TargetConfig         `yaml:"target"`
-	Options OptionsConfig        `yaml:"options"`
+	Server  ServerConfig          `yaml:"server"`
+	Target  TargetConfig          `yaml:"target"`
+	Options OptionsConfig         `yaml:"options"`
 	Steps   map[string]StepConfig `yaml:"steps"`
 }
 
@@ -24,9 +24,9 @@ type TargetConfig struct {
 }
 
 type OptionsConfig struct {
-	TimeoutSeconds     int  `yaml:"timeout_seconds"`
-	DefaultPauseSeconds int `yaml:"default_pause_seconds"`
-	StopOnFailure      bool `yaml:"stop_on_failure"`
+	TimeoutSeconds      int  `yaml:"timeout_seconds"`
+	DefaultPauseSeconds int  `yaml:"default_pause_seconds"`
+	StopOnFailure       bool `yaml:"stop_on_failure"`
 }
 
 type StepConfig struct {
@@ -59,7 +59,7 @@ func LoadPlan(path string) (*TestPlan, error) {
 
 func (p *TestPlan) normalize() {
 	if p.Server.URL == "" {
-		p.Server.URL = "http://127.0.0.1:9000/sse"
+		p.Server.URL = "http://127.0.0.1:9000/mcp"
 	}
 	if p.Options.TimeoutSeconds <= 0 {
 		p.Options.TimeoutSeconds = 60

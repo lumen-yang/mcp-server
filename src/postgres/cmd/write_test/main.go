@@ -83,7 +83,7 @@ func main() {
 }
 
 func NewRunner(plan *TestPlan) (*Runner, error) {
-	c, err := client.NewSSEMCPClient(plan.Server.URL, security.MCPClientOptionsFromEnv()...)
+	c, err := client.NewStreamableHttpClient(plan.Server.URL, security.MCPStreamableHTTPClientOptionsFromEnv()...)
 	if err != nil {
 		return nil, err
 	}

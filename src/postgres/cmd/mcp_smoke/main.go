@@ -16,14 +16,14 @@ import (
 )
 
 func main() {
-	url := flag.String("url", envOrDefault("SMOKE_SSE_URL", "http://127.0.0.1:9000/sse"), "MCP SSE URL")
+	url := flag.String("url", envOrDefault("SMOKE_SERVER_URL", envOrDefault("SMOKE_SSE_URL", "http://127.0.0.1:9000/mcp")), "MCP streamable-http URL")
 	region := flag.String("region", envOrDefault("SMOKE_REGION", "ap-guangzhou"), "region for readonly tool calls")
 	instanceID := flag.String("instance-id", envOrDefault("SMOKE_INSTANCE_ID", ""), "instance id for instance-scoped readonly tool calls")
 	listLimit := flag.Int("list-limit", envOrDefaultInt("SMOKE_LIST_LIMIT", 12), "max tool names to print from tools/list")
 	flag.Parse()
 
 	fmt.Println("== MCP smoke test ==")
-	fmt.Printf("SSE URL: %s\n", *url)
+	fmt.Printf("Server URL: %s\n", *url)
 	fmt.Printf("Region: %s\n", *region)
 	if *instanceID == "" {
 		fmt.Println("InstanceID: <not set>")
@@ -33,8 +33,8 @@ func main() {
 	}
 	fmt.Println()
 
-	c, err := client.NewSSEMCPClient(*url, security.MCPClientOptionsFromEnv()...)
-	must("create SSE client", err)
+	c, err := client.NewStreamableHttpClient(*url, security.MCPStreamableHTTPClientOptionsFromEnv()...)
+	must("create streamable-http client", err)
 
 	ctx := context.Background()
 	must("start client", c.Start(ctx))

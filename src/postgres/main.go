@@ -11,26 +11,74 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	"postgres_server/config"
 	"postgres_server/security"
 	"postgres_server/tools"
 )
 
 func main() {
-	// 初始化功能组开关
 	config.Init()
+	startedAt := time.Now().UTC()
 
-	secretID, secretKey, usingLegacyEnv := resolveCloudCredentials()
-	if secretID == "" || secretKey == "" {
-		log.Fatal("missing credentials: set MCP_SECRET_ID/MCP_SECRET_KEY")
-	}
-	if usingLegacyEnv {
-		log.Printf("warning: using legacy TENCENTCLOUD_SECRET_* envs; please migrate to MCP_SECRET_*")
-	}
-	authToken := security.APIAuthTokenFromEnv()
+	authMode := security.MCPAuthModeFromEnv()
+	adminEnabled := authMode == security.AuthModeIssuedToken && security.AdminAPITokenFromEnv() != ""
+	exchangeCfg := security.TencentCloudTokenExchangeConfigFromEnv(authMode)
+	needsTokenStore := authMode == security.AuthModeIssuedToken || adminEnabled || exchangeCfg.Enabled
 
-	// 创建 MCP Server
+	var (
+		sqliteStore        *security.SQLiteTokenStore
+		tokenStore         security.TokenStore
+		tokenIssuer        *security.TokenIssuer
+		issuerCfg          security.TokenIssuerConfig
+		credentialCipher   *security.CredentialCipher
+		credentialProvider security.CredentialProvider
+		tokenExchange      *security.TencentCloudTokenExchangeService
+		err                error
+	)
+
+	if needsTokenStore {
+		issuerCfg = security.TokenIssuerConfigFromEnv()
+		sqliteStore, err = security.NewSQLiteTokenStoreFromEnv()
+		if err != nil {
+			log.Fatalf("init token store failed: %v", err)
+		}
+		tokenStore = sqliteStore
+		tokenIssuer = security.NewTokenIssuer(sqliteStore, issuerCfg)
+	}
+
+	switch authMode {
+	case security.AuthModeIssuedToken:
+		credentialCipher, err = security.NewCredentialCipherFromEnv()
+		if err != nil {
+			log.Fatal(err)
+		}
+		credentialProvider, err = security.NewTokenBoundCredentialProvider(sqliteStore, credentialCipher)
+		if err != nil {
+			log.Fatal(err)
+		}
+	case security.AuthModeRequestCredential:
+		credentialProvider = security.NewRequestHeaderCredentialProvider()
+	default:
+		credentialProvider, err = security.NewStaticCredentialProviderFromEnv()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	if exchangeCfg.Enabled {
+		if credentialCipher == nil {
+			credentialCipher, err = security.NewCredentialCipherFromEnv()
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		tokenExchange, err = security.NewTencentCloudTokenExchangeService(tokenIssuer, sqliteStore, credentialCipher, exchangeCfg)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	guard := security.NewGuard()
 	mcpServerName := "mcp-server-postgres"
 	mcpsvr := server.NewMCPServer(
 		"腾讯云 Postgres MCP",
@@ -39,119 +87,176 @@ func main() {
 		server.WithLogging(),
 	)
 
-	// 创建腾讯云凭证
-	credential := common.NewCredential(secretID, secretKey)
-
-	// 创建 Guard 安全中间件
-	guard := security.NewGuard()
-
-	// 按功能组注册工具
 	toolCount := 0
-
 	if config.IsEnabled("instance") {
-		tools.RegisterInstanceTools(mcpsvr, credential, guard)
+		tools.RegisterInstanceTools(mcpsvr, credentialProvider, guard)
 		toolCount += 15
 	}
 	if config.IsEnabled("account") {
-		tools.RegisterAccountTools(mcpsvr, credential, guard)
+		tools.RegisterAccountTools(mcpsvr, credentialProvider, guard)
 		toolCount += 6
 	}
 	if config.IsEnabled("database") {
-		tools.RegisterDatabaseTools(mcpsvr, credential, guard)
+		tools.RegisterDatabaseTools(mcpsvr, credentialProvider, guard)
 		toolCount += 4
 	}
 	if config.IsEnabled("parameter") {
-		tools.RegisterParameterTools(mcpsvr, credential, guard)
+		tools.RegisterParameterTools(mcpsvr, credentialProvider, guard)
 		toolCount += 5
 	}
 	if config.IsEnabled("backup") {
-		tools.RegisterBackupTools(mcpsvr, credential, guard)
+		tools.RegisterBackupTools(mcpsvr, credentialProvider, guard)
 		toolCount += 8
 	}
 	if config.IsEnabled("monitoring") {
-		tools.RegisterMonitoringTools(mcpsvr, credential, guard)
+		tools.RegisterMonitoringTools(mcpsvr, credentialProvider, guard)
 		toolCount += 3
 	}
 	if config.IsEnabled("network") {
-		tools.RegisterNetworkTools(mcpsvr, credential, guard)
+		tools.RegisterNetworkTools(mcpsvr, credentialProvider, guard)
 		toolCount += 4
 	}
 	if config.IsEnabled("readonly") {
-		tools.RegisterReadonlyTools(mcpsvr, credential, guard)
+		tools.RegisterReadonlyTools(mcpsvr, credentialProvider, guard)
 		toolCount += 2
 	}
-	// SSL 工具始终注册（1个）
-	tools.RegisterSSLTools(mcpsvr, credential, guard)
+	tools.RegisterSSLTools(mcpsvr, credentialProvider, guard)
 	toolCount += 1
-
 	log.Printf("Total tools registered: %d", toolCount)
 
-	// 启动 SSE Server
-	sseEndpoint := getEnv("MCP_SERVER_SSE_ENDPOINT", "/sse")
-	messageEndpoint := getEnv("MCP_SERVER_MESSAGE_ENDPOINT", "/message")
-	ssePort := getEnv("MCP_SERVER_PORT", getEnv("MCP_SERVER_SSE_PORT", "9000"))
-	bindHost := getEnv("MCP_SERVER_BIND_HOST", "127.0.0.1")
-	listenAddr := fmt.Sprintf("%s:%s", bindHost, ssePort)
+	authenticator, err := security.NewMCPAuthenticator(authMode, tokenStore, issuerCfg.Pepper)
+	if err != nil {
+		log.Fatalf("init auth failed: %v", err)
+	}
 
-	sseServer := server.NewSSEServer(mcpsvr,
-		server.WithSSEEndpoint(sseEndpoint),
-		server.WithMessageEndpoint(messageEndpoint),
-		server.WithAppendQueryToMessageEndpoint())
+	httpEndpoint := transportEndpointFromEnv()
+	serverPort := getEnv("MCP_SERVER_PORT", getEnv("MCP_SERVER_SSE_PORT", "9000"))
+	bindHost := getEnv("MCP_SERVER_BIND_HOST", "127.0.0.1")
+	listenAddr := fmt.Sprintf("%s:%s", bindHost, serverPort)
+	serverURL := buildServerURL(bindHost, serverPort, httpEndpoint)
+	statelessHTTP := getEnvBool("MCP_STREAMABLE_HTTP_STATELESS", true)
+
+	transportServer := server.NewStreamableHTTPServer(mcpsvr,
+		server.WithEndpointPath(httpEndpoint),
+		server.WithStateLess(statelessHTTP),
+	)
+
+	mux := http.NewServeMux()
+	security.RegisterHealthRoutes(mux, security.HealthStatus{
+		Service:   mcpServerName,
+		Version:   "1.0.0",
+		StartedAt: startedAt,
+	})
+	if adminEnabled {
+		security.RegisterAdminRoutes(mux, tokenIssuer, tokenStore)
+	}
+	if tokenExchange != nil {
+		security.RegisterTokenExchangeRoutes(mux, tokenExchange, security.TokenExchangeBootstrapConfig{
+			MCPServerName: mcpServerName,
+			ServerURL:     serverURL,
+		})
+	}
+	mux.Handle(httpEndpoint, security.WrapMCPAuth(authenticator, transportServer))
 
 	httpServer := &http.Server{
 		Addr:              listenAddr,
-		Handler:           security.WrapHTTPAuth(authToken, sseServer),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
 
-	log.Printf("SSE server listening on %s", listenAddr)
-	if authToken != "" {
-		log.Printf("MCP API token auth enabled (Authorization: Bearer <token> or %s)", security.APIAuthFallbackHeader)
+	log.Printf("MCP streamable-http server listening on %s%s", listenAddr, httpEndpoint)
+	log.Printf("MCP transport: streamable-http (stateless=%t)", statelessHTTP)
+	switch authMode {
+	case security.AuthModeSharedToken:
+		log.Printf("MCP auth mode: shared-token (%s)", security.APIAuthFallbackHeader)
+	case security.AuthModeIssuedToken:
+		log.Printf("MCP auth mode: issued-token")
+		log.Printf("Token store: %s", security.TokenStorePathFromEnv())
+		log.Printf("Credential source: token-bound dynamic credentials")
+	case security.AuthModeRequestCredential:
+		log.Printf("MCP auth mode: request-credential")
+		log.Printf("Credential source: %s / %s / %s", security.RequestSecretIDHeader, security.RequestSecretKeyHeader, security.RequestSessionTokenHeader)
+		if security.RequestCredentialValidateIdentityFromEnv() {
+			log.Printf("Request credential identity validation: enabled via STS GetCallerIdentity")
+		} else {
+			log.Printf("warning: request credential identity validation is disabled")
+		}
+	default:
+		log.Printf("MCP auth mode: none")
 	}
-	serverURL := buildServerURL(bindHost, ssePort, sseEndpoint)
-	outputMCPServerConfig(mcpServerName, serverURL, authToken != "")
+	if adminEnabled {
+		log.Printf("Admin token API enabled on /admin/tokens")
+	} else if authMode == security.AuthModeIssuedToken {
+		log.Printf("warning: issued-token mode is enabled but %s is empty; admin token API is disabled", security.AdminAPITokenEnv)
+	}
+	if tokenExchange != nil {
+		log.Printf("TencentCloud token exchange enabled on /auth/token-exchange/tencentcloud (%s)", exchangeCfg.Mode)
+	}
+	log.Printf("Health check endpoints enabled on /healthz and /readyz")
+
+	outputMCPServerConfig(mcpServerName, serverURL, authMode)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Server error: %v", err)
 	}
 }
 
-func outputMCPServerConfig(mcpServerName, serverURL string, authEnabled bool) {
-	serverConfig := map[string]interface{}{
+func outputMCPServerConfig(mcpServerName, serverURL string, authMode security.AuthMode) {
+	serverConfig := map[string]any{
 		"url":  serverURL,
-		"type": "sse",
+		"type": "streamable-http",
 	}
-	if authEnabled {
-		serverConfig["headers"] = map[string]string{
-			"Authorization": "Bearer <MCP_API_TOKEN>",
-		}
+	if headers, ok := clientHeaderPlaceholders(authMode); ok {
+		serverConfig["headers"] = headers
 	}
 
-	config := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
+	configPayload := map[string]any{
+		"mcpServers": map[string]any{
 			mcpServerName: serverConfig,
 		},
 	}
 
-	jsonOutput, _ := json.MarshalIndent(config, "", " ")
+	jsonOutput, _ := json.MarshalIndent(configPayload, "", " ")
 	fmt.Println("=== MCP Server Configuration ===")
 	fmt.Println("Copy the following configuration to your MCP client:")
 	fmt.Println()
 	fmt.Println(string(jsonOutput))
 	fmt.Println()
-	if authEnabled {
+	switch authMode {
+	case security.AuthModeSharedToken:
 		fmt.Println("Authentication is enabled for this server.")
 		fmt.Printf("Replace <MCP_API_TOKEN> with the shared token, or use header %s if your client does not support Bearer config.\n", security.APIAuthFallbackHeader)
 		fmt.Println()
+	case security.AuthModeIssuedToken:
+		fmt.Println("Issued-token auth is enabled for this server.")
+		fmt.Println("Use POST /auth/token-exchange/tencentcloud to exchange TencentCloud credentials for a local MCP access token, or let an admin create one via POST /admin/tokens.")
+		fmt.Println()
+	case security.AuthModeRequestCredential:
+		fmt.Println("Request-credential auth is enabled for this server.")
+		fmt.Printf("Every MCP request must carry %s and %s headers. %s is optional for STS temporary credentials.\n", security.RequestSecretIDHeader, security.RequestSecretKeyHeader, security.RequestSessionTokenHeader)
+		fmt.Println("Use HTTPS in production and never place secret material in URL query parameters.")
+		fmt.Println()
 	}
 	fmt.Println("The server is now ready to accept connections.")
+}
+
+func clientHeaderPlaceholders(authMode security.AuthMode) (map[string]string, bool) {
+	switch authMode {
+	case security.AuthModeSharedToken:
+		return map[string]string{"Authorization": "Bearer <MCP_API_TOKEN>"}, true
+	case security.AuthModeIssuedToken:
+		return map[string]string{"Authorization": "Bearer <MCP_ACCESS_TOKEN>"}, true
+	case security.AuthModeRequestCredential:
+		return security.RequestCredentialPlaceholderHeaders(), true
+	default:
+		return nil, false
+	}
 }
 
 func buildServerURL(bindHost, port, endpoint string) string {
 	if publicURL := strings.TrimSpace(os.Getenv("MCP_SERVER_PUBLIC_URL")); publicURL != "" {
 		return publicURL
 	}
-
 	host := strings.TrimSpace(bindHost)
 	switch host {
 	case "", "0.0.0.0", "::":
@@ -160,22 +265,22 @@ func buildServerURL(bindHost, port, endpoint string) string {
 	return fmt.Sprintf("http://%s:%s%s", host, port, endpoint)
 }
 
-func resolveCloudCredentials() (secretID, secretKey string, usingLegacyEnv bool) {
-	secretID = strings.TrimSpace(os.Getenv("MCP_SECRET_ID"))
-	secretKey = strings.TrimSpace(os.Getenv("MCP_SECRET_KEY"))
-	if secretID == "" {
-		if legacy := strings.TrimSpace(os.Getenv("TENCENTCLOUD_SECRET_ID")); legacy != "" {
-			secretID = legacy
-			usingLegacyEnv = true
-		}
+func transportEndpointFromEnv() string {
+	if endpoint := getEnv("MCP_SERVER_HTTP_ENDPOINT", ""); endpoint != "" {
+		return normalizeEndpointPath(endpoint)
 	}
-	if secretKey == "" {
-		if legacy := strings.TrimSpace(os.Getenv("TENCENTCLOUD_SECRET_KEY")); legacy != "" {
-			secretKey = legacy
-			usingLegacyEnv = true
-		}
+	if endpoint := getEnv("MCP_SERVER_SSE_ENDPOINT", ""); endpoint != "" {
+		return normalizeEndpointPath(endpoint)
 	}
-	return secretID, secretKey, usingLegacyEnv
+	return "/mcp"
+}
+
+func normalizeEndpointPath(path string) string {
+	trimmed := strings.Trim(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		return "/mcp"
+	}
+	return "/" + trimmed
 }
 
 func getEnv(key, fallback string) string {
@@ -183,4 +288,19 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }

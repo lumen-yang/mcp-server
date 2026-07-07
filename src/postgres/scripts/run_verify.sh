@@ -4,9 +4,14 @@
 #
 # 该脚本会：
 #   1. 编译 MCP server 和验证客户端(cmd/verify)到临时目录
-#   2. 加载 .env（含真实腾讯云密钥）启动本地 server 进程（127.0.0.1:9000）
+#   2. 加载 .env 启动本地 server 进程（127.0.0.1:9000）
 #   3. 运行验证客户端，对一批只读(Describe*)接口发起真实调用
 #   4. 打印结果，并在脚本退出时自动清理 server 进程
+#
+# 当前默认的 request-credential 模式下：
+#   - 服务端本身不要求预置 MCP_SECRET_ID / MCP_SECRET_KEY
+#   - 验证客户端会优先读取 MCP_REQUEST_SECRET_ID / MCP_REQUEST_SECRET_KEY
+#   - 若未设置，也会回退读取 MCP_SECRET_ID / MCP_SECRET_KEY
 #
 # 可选环境变量：
 #   VERIFY_REGION=ap-guangzhou
@@ -36,6 +41,16 @@ cleanup() {
   rm -rf "${BIN_DIR}"
 }
 trap cleanup EXIT
+
+pick_free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+}
 
 if [[ ! -f "${PROJECT_DIR}/.env" ]]; then
   echo "错误：未找到 ${PROJECT_DIR}/.env，请先根据 .env.example 配置真实密钥后再运行。" >&2
@@ -67,9 +82,13 @@ set -a
 source .env
 set +a
 
-VERIFY_SERVER_PORT="${VERIFY_SERVER_PORT:-${MCP_SERVER_PORT:-${MCP_SERVER_SSE_PORT:-9000}}}"
-VERIFY_SSE_ENDPOINT="${MCP_SERVER_SSE_ENDPOINT:-/sse}"
-VERIFY_SSE_URL="${VERIFY_SSE_URL:-http://127.0.0.1:${VERIFY_SERVER_PORT}${VERIFY_SSE_ENDPOINT}}"
+if [[ -z "${VERIFY_SERVER_PORT:-}" ]]; then
+  VERIFY_SERVER_PORT="$(pick_free_port)"
+else
+  VERIFY_SERVER_PORT="${VERIFY_SERVER_PORT}"
+fi
+VERIFY_HTTP_ENDPOINT="${MCP_SERVER_HTTP_ENDPOINT:-${MCP_SERVER_SSE_ENDPOINT:-/mcp}}"
+VERIFY_SERVER_URL="${VERIFY_SERVER_URL:-${VERIFY_SSE_URL:-http://127.0.0.1:${VERIFY_SERVER_PORT}${VERIFY_HTTP_ENDPOINT}}}"
 VERIFY_REGION="${VERIFY_REGION:-ap-guangzhou}"
 
 if [[ -z "${VERIFY_INSTANCE_ID:-}" ]]; then
@@ -81,8 +100,13 @@ MCP_SERVER_PORT="${VERIFY_SERVER_PORT}" "${SERVER_BIN}" > "${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
 
 # 等待 server 就绪
+READY=0
 for _ in $(seq 1 40); do
-  if grep -q "SSE server listening on" "${LOG_FILE}" 2>/dev/null; then
+  if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+    break
+  fi
+  if curl -fsS "http://127.0.0.1:${VERIFY_SERVER_PORT}/healthz" >/dev/null 2>&1; then
+    READY=1
     break
   fi
   sleep 0.5
@@ -92,10 +116,15 @@ echo "----- server 启动日志 -----"
 cat "${LOG_FILE}"
 echo "---------------------------"
 
+if [[ "${READY}" != "1" ]] || ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+  echo "错误：本地 server 未成功启动，请检查上方日志。" >&2
+  exit 1
+fi
+
 echo "==> 运行验证客户端（对真实腾讯云测试实例发起只读调用）..."
 VERIFY_REGION="${VERIFY_REGION}" \
 VERIFY_INSTANCE_ID="${VERIFY_INSTANCE_ID}" \
-VERIFY_SSE_URL="${VERIFY_SSE_URL}" \
+VERIFY_SERVER_URL="${VERIFY_SERVER_URL}" \
 "${VERIFY_BIN}"
 
 echo ""

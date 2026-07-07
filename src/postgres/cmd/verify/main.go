@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	url := flag.String("url", envOrDefault("VERIFY_SSE_URL", "http://127.0.0.1:9000/sse"), "MCP SSE URL")
+	url := flag.String("url", envOrDefault("VERIFY_SERVER_URL", envOrDefault("VERIFY_SSE_URL", "http://127.0.0.1:9000/mcp")), "MCP streamable-http URL")
 	region := flag.String("region", envOrDefault("VERIFY_REGION", "ap-guangzhou"), "region for readonly tool calls")
 	instanceID := flag.String("instance-id", envOrDefault("VERIFY_INSTANCE_ID", ""), "instance id for instance-scoped readonly tool calls")
 	flag.Parse()
@@ -25,7 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	c, err := client.NewSSEMCPClient(*url, security.MCPClientOptionsFromEnv()...)
+	c, err := client.NewStreamableHttpClient(*url, security.MCPStreamableHTTPClientOptionsFromEnv()...)
 	if err != nil {
 		fmt.Println("new client error:", err)
 		os.Exit(1)

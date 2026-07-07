@@ -11,7 +11,7 @@
 #   - 建议把私有环境参数保存在内部系统或本地副本中，不直接提交到仓库
 
 server:
-  url: http://127.0.0.1:9000/sse
+  url: http://127.0.0.1:9000/mcp
 
 target:
   region: ap-xxx

@@ -28,6 +28,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+pick_free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+}
+
 if [[ ! -f "${PROJECT_DIR}/.env" ]]; then
   echo "错误：未找到 ${PROJECT_DIR}/.env，请先配置真实密钥后再运行。" >&2
   exit 1
@@ -49,9 +59,13 @@ esac
 SMOKE_REGION="${SMOKE_REGION:-ap-guangzhou}"
 SMOKE_INSTANCE_ID="${SMOKE_INSTANCE_ID:-}"
 SMOKE_LIST_LIMIT="${SMOKE_LIST_LIMIT:-12}"
-SMOKE_SERVER_PORT="${SMOKE_SERVER_PORT:-9000}"
-SMOKE_SSE_ENDPOINT="${MCP_SERVER_SSE_ENDPOINT:-/sse}"
-SMOKE_SSE_URL="http://127.0.0.1:${SMOKE_SERVER_PORT}${SMOKE_SSE_ENDPOINT}"
+if [[ -z "${SMOKE_SERVER_PORT:-}" ]]; then
+  SMOKE_SERVER_PORT="$(pick_free_port)"
+else
+  SMOKE_SERVER_PORT="${SMOKE_SERVER_PORT}"
+fi
+SMOKE_HTTP_ENDPOINT="${MCP_SERVER_HTTP_ENDPOINT:-${MCP_SERVER_SSE_ENDPOINT:-/mcp}}"
+SMOKE_SERVER_URL="${SMOKE_SERVER_URL:-${SMOKE_SSE_URL:-http://127.0.0.1:${SMOKE_SERVER_PORT}${SMOKE_HTTP_ENDPOINT}}}"
 
 echo "==> 编译 server 与 smoke client（目标平台: ${HOST_GOOS}/${HOST_GOARCH}）..."
 GOOS="${HOST_GOOS}" GOARCH="${HOST_GOARCH}" go build -o "${SERVER_BIN}" .
@@ -65,8 +79,13 @@ set +a
 MCP_SERVER_PORT="${SMOKE_SERVER_PORT}" "${SERVER_BIN}" > "${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
 
+READY=0
 for _ in $(seq 1 40); do
-  if grep -q "SSE server listening on" "${LOG_FILE}" 2>/dev/null; then
+  if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+    break
+  fi
+  if curl -fsS "http://127.0.0.1:${SMOKE_SERVER_PORT}/healthz" >/dev/null 2>&1; then
+    READY=1
     break
   fi
   sleep 0.5
@@ -76,10 +95,15 @@ echo "----- server 启动日志 -----"
 cat "${LOG_FILE}"
 echo "---------------------------"
 
+if [[ "${READY}" != "1" ]] || ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+  echo "错误：本地 server 未成功启动，请检查上方日志。" >&2
+  exit 1
+fi
+
 echo "==> 运行 MCP smoke client..."
 SMOKE_REGION="${SMOKE_REGION}" \
 SMOKE_INSTANCE_ID="${SMOKE_INSTANCE_ID}" \
-SMOKE_SSE_URL="${SMOKE_SSE_URL}" \
+SMOKE_SERVER_URL="${SMOKE_SERVER_URL}" \
 SMOKE_LIST_LIMIT="${SMOKE_LIST_LIMIT}" \
 "${SMOKE_BIN}"
 

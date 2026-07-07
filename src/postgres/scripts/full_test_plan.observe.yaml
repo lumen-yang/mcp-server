@@ -4,7 +4,7 @@
 # 使用前请复制一份私有副本，再填写真实 target / args；不要把真实测试环境信息直接提交到仓库。
 
 server:
-  url: http://127.0.0.1:9000/sse
+  url: http://127.0.0.1:9000/mcp
 
 target:
   region: ap-xxx
