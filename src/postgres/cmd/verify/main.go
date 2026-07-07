@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -10,13 +11,21 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"postgres_server/security"
 )
 
-const region = "ap-chengdu"
-const instanceID = "postgres-1lbqykq6"
-
 func main() {
-	c, err := client.NewSSEMCPClient("http://127.0.0.1:9000/sse")
+	url := flag.String("url", envOrDefault("VERIFY_SSE_URL", "http://127.0.0.1:9000/sse"), "MCP SSE URL")
+	region := flag.String("region", envOrDefault("VERIFY_REGION", "ap-guangzhou"), "region for readonly tool calls")
+	instanceID := flag.String("instance-id", envOrDefault("VERIFY_INSTANCE_ID", ""), "instance id for instance-scoped readonly tool calls")
+	flag.Parse()
+
+	if strings.TrimSpace(*instanceID) == "" {
+		fmt.Println("missing instance id: set VERIFY_INSTANCE_ID or pass --instance-id")
+		os.Exit(1)
+	}
+
+	c, err := client.NewSSEMCPClient(*url, security.MCPClientOptionsFromEnv()...)
 	if err != nil {
 		fmt.Println("new client error:", err)
 		os.Exit(1)
@@ -64,8 +73,8 @@ func main() {
 		results[name] = out
 	}
 
-	base := map[string]interface{}{"region": region, "DBInstanceId": instanceID}
-	noID := map[string]interface{}{"region": region}
+	base := map[string]interface{}{"region": *region, "DBInstanceId": *instanceID}
+	noID := map[string]interface{}{"region": *region}
 
 	// 1-5 instance group
 	out, err := call("DescribeDBInstanceAttribute", base)
@@ -74,9 +83,14 @@ func main() {
 	out, err = call("DescribeDBInstances", noID)
 	record("DescribeDBInstances", out, err)
 
-	// Zone、DBMajorVersion 均为必填参数，用当前实例所在可用区及主版本号（见 DescribeDBInstanceAttribute 结果）
-	out, err = call("DescribeClasses", map[string]interface{}{"region": region, "Zone": "ap-chengdu-1", "DBEngine": "postgresql", "DBMajorVersion": "18"})
-	record("DescribeClasses", out, err)
+	zone := extractInstanceField(out, *instanceID, "Zone")
+	majorVersion := extractInstanceField(out, *instanceID, "DBMajorVersion")
+	if zone != "" && majorVersion != "" {
+		out, err = call("DescribeClasses", map[string]interface{}{"region": *region, "Zone": zone, "DBEngine": "postgresql", "DBMajorVersion": majorVersion})
+		record("DescribeClasses", out, err)
+	} else {
+		record("DescribeClasses", fmt.Sprintf("SKIPPED: missing Zone/DBMajorVersion for instance %s", *instanceID), nil)
+	}
 
 	out, err = call("DescribeDBVersions", noID)
 	record("DescribeDBVersions", out, err)
@@ -90,7 +104,7 @@ func main() {
 	out, err = call("DescribeZones", noID)
 	record("DescribeZones", out, err)
 
-	out, err = call("DescribeProductConfig", map[string]interface{}{"region": region, "DBEngine": "postgresql"})
+	out, err = call("DescribeProductConfig", map[string]interface{}{"region": *region, "DBEngine": "postgresql"})
 	record("DescribeProductConfig", out, err)
 
 	// parameter group
@@ -103,12 +117,11 @@ func main() {
 	out, err = call("DescribeParameterTemplates", noID)
 	record("DescribeParameterTemplates", out, err)
 	templateID := extractFirst(out, "TemplateId")
-	fmt.Println("DEBUG extracted templateID:", templateID)
 
 	if templateID != "" {
-		out, err = call("DescribeParameterTemplateAttributes", map[string]interface{}{"region": region, "TemplateId": templateID})
+		out, err = call("DescribeParameterTemplateAttributes", map[string]interface{}{"region": *region, "TemplateId": templateID})
 	} else {
-		out, err = call("DescribeParameterTemplateAttributes", map[string]interface{}{"region": region, "TemplateId": "notfound"})
+		out, err = call("DescribeParameterTemplateAttributes", map[string]interface{}{"region": *region, "TemplateId": "notfound"})
 	}
 	record("DescribeParameterTemplateAttributes", out, err)
 
@@ -126,8 +139,8 @@ func main() {
 
 	// UserName + DatabaseObjectSet 均为查询权限的必填参数
 	out, err = call("DescribeAccountPrivileges", map[string]interface{}{
-		"region":       region,
-		"DBInstanceId": instanceID,
+		"region":       *region,
+		"DBInstanceId": *instanceID,
 		"UserName":     userName,
 		"DatabaseObjectSet": []map[string]interface{}{
 			{"ObjectType": "database", "ObjectName": "postgres"},
@@ -142,8 +155,8 @@ func main() {
 	// monitoring
 	now := time.Now()
 	monArgs := map[string]interface{}{
-		"region":       region,
-		"DBInstanceId": instanceID,
+		"region":       *region,
+		"DBInstanceId": *instanceID,
 		"StartTime":    now.Add(-24 * time.Hour).Format("2006-01-02 15:04:05"),
 		"EndTime":      now.Format("2006-01-02 15:04:05"),
 	}
@@ -165,9 +178,9 @@ func main() {
 	}
 
 	if dbName != "" {
-		out, err = call("DescribeDatabaseObjects", map[string]interface{}{"region": region, "DBInstanceId": instanceID, "DatabaseName": dbName, "ObjectType": "schema"})
+		out, err = call("DescribeDatabaseObjects", map[string]interface{}{"region": *region, "DBInstanceId": *instanceID, "DatabaseName": dbName, "ObjectType": "schema"})
 	} else {
-		out, err = call("DescribeDatabaseObjects", map[string]interface{}{"region": region, "DBInstanceId": instanceID, "DatabaseName": "postgres", "ObjectType": "schema"})
+		out, err = call("DescribeDatabaseObjects", map[string]interface{}{"region": *region, "DBInstanceId": *instanceID, "DatabaseName": "postgres", "ObjectType": "schema"})
 	}
 	record("DescribeDatabaseObjects", out, err)
 
@@ -176,15 +189,15 @@ func main() {
 	record("DescribeBackupOverview", out, err)
 
 	backupQuery := map[string]interface{}{
-		"region": region,
+		"region": *region,
 		"Filters": []map[string]interface{}{
-			{"Name": "db-instance-id", "Values": []string{instanceID}},
+			{"Name": "db-instance-id", "Values": []string{*instanceID}},
 		},
 		"Limit": 20,
 	}
 	out, err = call("DescribeBaseBackups", backupQuery)
 	record("DescribeBaseBackups", out, err)
-	backupSetId := extractFirst(out, "Id")
+	backupSetID := extractFirst(out, "Id")
 
 	out, err = call("DescribeLogBackups", backupQuery)
 	record("DescribeLogBackups", out, err)
@@ -193,9 +206,9 @@ func main() {
 	record("DescribeAvailableRecoveryTime", out, err)
 
 	// BackupSetId 与 RecoveryTargetTime 必须二选一传入，这里优先用真实的基础备份集ID
-	cloneArgs := map[string]interface{}{"region": region, "DBInstanceId": instanceID}
-	if backupSetId != "" {
-		cloneArgs["BackupSetId"] = backupSetId
+	cloneArgs := map[string]interface{}{"region": *region, "DBInstanceId": *instanceID}
+	if backupSetID != "" {
+		cloneArgs["BackupSetId"] = backupSetID
 	} else {
 		cloneArgs["RecoveryTargetTime"] = time.Now().Add(-1 * time.Hour).Format("2006-01-02 15:04:05")
 	}
@@ -216,7 +229,7 @@ func main() {
 	}
 }
 
-// extractFirst 从JSON文本里粗略提取第一个字段值(仅用于验证脚本内部串联参数,非生产代码)
+// extractFirst 从 JSON 文本里粗略提取第一个字段值（仅用于验证脚本内部串联参数，非生产代码）
 func extractFirst(jsonText string, field string) string {
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonText), &raw); err != nil {
@@ -240,4 +253,53 @@ func extractFirst(jsonText string, field string) string {
 		}
 	}
 	return ""
+}
+
+func extractInstanceField(jsonText, instanceID, field string) string {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonText), &raw); err != nil {
+		return ""
+	}
+	resp, ok := raw["Response"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	instances, ok := resp["DBInstanceSet"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, item := range instances {
+		instance, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if instanceID != "" && stringValue(instance["DBInstanceId"]) != instanceID {
+			continue
+		}
+		return stringValue(instance[field])
+	}
+	return ""
+}
+
+func stringValue(v interface{}) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case fmt.Stringer:
+		return x.String()
+	case float64:
+		if x == float64(int64(x)) {
+			return fmt.Sprintf("%d", int64(x))
+		}
+		return fmt.Sprintf("%v", x)
+	default:
+		return ""
+	}
+}
+
+func envOrDefault(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
 }

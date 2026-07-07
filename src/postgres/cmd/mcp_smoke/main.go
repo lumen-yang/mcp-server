@@ -12,22 +12,28 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"postgres_server/security"
 )
 
 func main() {
 	url := flag.String("url", envOrDefault("SMOKE_SSE_URL", "http://127.0.0.1:9000/sse"), "MCP SSE URL")
-	region := flag.String("region", envOrDefault("SMOKE_REGION", "ap-chengdu"), "region for readonly tool calls")
-	instanceID := flag.String("instance-id", envOrDefault("SMOKE_INSTANCE_ID", "postgres-1lbqykq6"), "instance id for instance-scoped readonly tool calls")
+	region := flag.String("region", envOrDefault("SMOKE_REGION", "ap-guangzhou"), "region for readonly tool calls")
+	instanceID := flag.String("instance-id", envOrDefault("SMOKE_INSTANCE_ID", ""), "instance id for instance-scoped readonly tool calls")
 	listLimit := flag.Int("list-limit", envOrDefaultInt("SMOKE_LIST_LIMIT", 12), "max tool names to print from tools/list")
 	flag.Parse()
 
 	fmt.Println("== MCP smoke test ==")
 	fmt.Printf("SSE URL: %s\n", *url)
 	fmt.Printf("Region: %s\n", *region)
-	fmt.Printf("InstanceID: %s\n", *instanceID)
+	if *instanceID == "" {
+		fmt.Println("InstanceID: <not set>")
+		fmt.Println("Note: instance-scoped readonly calls will be skipped.")
+	} else {
+		fmt.Printf("InstanceID: %s\n", *instanceID)
+	}
 	fmt.Println()
 
-	c, err := client.NewSSEMCPClient(*url)
+	c, err := client.NewSSEMCPClient(*url, security.MCPClientOptionsFromEnv()...)
 	must("create SSE client", err)
 
 	ctx := context.Background()
@@ -110,6 +116,10 @@ func main() {
 	callAndPrint(ctx, c, "postgres-DescribeDBInstances", map[string]any{"region": *region, "Limit": 2, "Offset": 0})
 	if *instanceID != "" {
 		callAndPrint(ctx, c, "postgres-DescribeDBInstanceAttribute", map[string]any{"region": *region, "DBInstanceId": *instanceID})
+	} else {
+		fmt.Println("-- postgres-DescribeDBInstanceAttribute --")
+		fmt.Println("skipped: missing instance id")
+		fmt.Println()
 	}
 	callAndPrint(ctx, c, "postgres-CreateInstances", map[string]any{"region": *region, "confirm": false})
 }

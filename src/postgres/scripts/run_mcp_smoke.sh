@@ -2,8 +2,8 @@
 # MCP 协议级 smoke test：启动本地 server，并用真实 MCP 客户端完成 initialize/tools/list/tools/call。
 # 用法：在 src/postgres 目录下执行 ./scripts/run_mcp_smoke.sh
 # 可选环境变量：
-#   SMOKE_REGION=ap-chengdu
-#   SMOKE_INSTANCE_ID=postgres-1lbqykq6
+#   SMOKE_REGION=ap-guangzhou
+#   SMOKE_INSTANCE_ID=postgres-xxxxxxxx
 #   SMOKE_LIST_LIMIT=12
 #   SMOKE_SERVER_PORT=9000
 
@@ -46,8 +46,8 @@ case "$(uname -m)" in
   *) HOST_GOARCH="$(uname -m)" ;;
 esac
 
-SMOKE_REGION="${SMOKE_REGION:-ap-chengdu}"
-SMOKE_INSTANCE_ID="${SMOKE_INSTANCE_ID:-postgres-1lbqykq6}"
+SMOKE_REGION="${SMOKE_REGION:-ap-guangzhou}"
+SMOKE_INSTANCE_ID="${SMOKE_INSTANCE_ID:-}"
 SMOKE_LIST_LIMIT="${SMOKE_LIST_LIMIT:-12}"
 SMOKE_SERVER_PORT="${SMOKE_SERVER_PORT:-9000}"
 SMOKE_SSE_ENDPOINT="${MCP_SERVER_SSE_ENDPOINT:-/sse}"
@@ -62,7 +62,7 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
-MCP_SERVER_SSE_PORT="${SMOKE_SERVER_PORT}" "${SERVER_BIN}" > "${LOG_FILE}" 2>&1 &
+MCP_SERVER_PORT="${SMOKE_SERVER_PORT}" "${SERVER_BIN}" > "${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
 
 for _ in $(seq 1 40); do

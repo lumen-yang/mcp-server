@@ -12,6 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"postgres_server/security"
 )
 
 type StepRunner struct {
@@ -82,7 +83,7 @@ func main() {
 }
 
 func NewRunner(plan *TestPlan) (*Runner, error) {
-	c, err := client.NewSSEMCPClient(plan.Server.URL)
+	c, err := client.NewSSEMCPClient(plan.Server.URL, security.MCPClientOptionsFromEnv()...)
 	if err != nil {
 		return nil, err
 	}
