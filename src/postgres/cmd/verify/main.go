@@ -15,17 +15,22 @@ import (
 )
 
 func main() {
-	url := flag.String("url", envOrDefault("VERIFY_SERVER_URL", envOrDefault("VERIFY_SSE_URL", "http://127.0.0.1:9000/mcp")), "MCP streamable-http URL")
+	transportMode := flag.String("transport", normalizeTransport(envOrDefault("VERIFY_TRANSPORT", envOrDefault("MCP_TRANSPORT", "streamable-http"))), "transport: streamable-http | sse | stdio")
+	url := flag.String("url", defaultURL(*transportMode, "VERIFY_SERVER_URL", "VERIFY_SSE_URL"), "MCP URL for HTTP/SSE transports")
+	stdioCommand := flag.String("command", envOrDefault("VERIFY_STDIO_COMMAND", ""), "stdio command path")
 	region := flag.String("region", envOrDefault("VERIFY_REGION", "ap-guangzhou"), "region for readonly tool calls")
 	instanceID := flag.String("instance-id", envOrDefault("VERIFY_INSTANCE_ID", ""), "instance id for instance-scoped readonly tool calls")
 	flag.Parse()
+
+	mode := normalizeTransport(*transportMode)
+	*transportMode = mode
 
 	if strings.TrimSpace(*instanceID) == "" {
 		fmt.Println("missing instance id: set VERIFY_INSTANCE_ID or pass --instance-id")
 		os.Exit(1)
 	}
 
-	c, err := client.NewStreamableHttpClient(*url, security.MCPStreamableHTTPClientOptionsFromEnv()...)
+	c, err := newMCPClient(mode, *url, *stdioCommand)
 	if err != nil {
 		fmt.Println("new client error:", err)
 		os.Exit(1)
@@ -76,7 +81,6 @@ func main() {
 	base := map[string]interface{}{"region": *region, "DBInstanceId": *instanceID}
 	noID := map[string]interface{}{"region": *region}
 
-	// 1-5 instance group
 	out, err := call("DescribeDBInstanceAttribute", base)
 	record("DescribeDBInstanceAttribute", out, err)
 
@@ -107,7 +111,6 @@ func main() {
 	out, err = call("DescribeProductConfig", map[string]interface{}{"region": *region, "DBEngine": "postgresql"})
 	record("DescribeProductConfig", out, err)
 
-	// parameter group
 	out, err = call("DescribeDBInstanceParameters", base)
 	record("DescribeDBInstanceParameters", out, err)
 
@@ -125,11 +128,9 @@ func main() {
 	}
 	record("DescribeParameterTemplateAttributes", out, err)
 
-	// ssl
 	out, err = call("DescribeDBInstanceSSLConfig", base)
 	record("DescribeDBInstanceSSLConfig", out, err)
 
-	// account
 	out, err = call("DescribeAccounts", base)
 	record("DescribeAccounts", out, err)
 	userName := extractFirst(out, "UserName")
@@ -137,7 +138,6 @@ func main() {
 		userName = "postgres"
 	}
 
-	// UserName + DatabaseObjectSet 均为查询权限的必填参数
 	out, err = call("DescribeAccountPrivileges", map[string]interface{}{
 		"region":       *region,
 		"DBInstanceId": *instanceID,
@@ -148,11 +148,9 @@ func main() {
 	})
 	record("DescribeAccountPrivileges", out, err)
 
-	// network
 	out, err = call("DescribeDBInstanceSecurityGroups", base)
 	record("DescribeDBInstanceSecurityGroups", out, err)
 
-	// monitoring
 	now := time.Now()
 	monArgs := map[string]interface{}{
 		"region":       *region,
@@ -169,7 +167,6 @@ func main() {
 	out, err = call("DescribeDBErrlogs", monArgs)
 	record("DescribeDBErrlogs", out, err)
 
-	// database
 	out, err = call("DescribeDatabases", base)
 	record("DescribeDatabases", out, err)
 	dbName := extractFirst(out, "DBName")
@@ -184,7 +181,6 @@ func main() {
 	}
 	record("DescribeDatabaseObjects", out, err)
 
-	// backup
 	out, err = call("DescribeBackupOverview", noID)
 	record("DescribeBackupOverview", out, err)
 
@@ -205,7 +201,6 @@ func main() {
 	out, err = call("DescribeAvailableRecoveryTime", base)
 	record("DescribeAvailableRecoveryTime", out, err)
 
-	// BackupSetId 与 RecoveryTargetTime 必须二选一传入，这里优先用真实的基础备份集ID
 	cloneArgs := map[string]interface{}{"region": *region, "DBInstanceId": *instanceID}
 	if backupSetID != "" {
 		cloneArgs["BackupSetId"] = backupSetID
@@ -215,7 +210,6 @@ func main() {
 	out, err = call("DescribeCloneDBInstanceSpec", cloneArgs)
 	record("DescribeCloneDBInstanceSpec", out, err)
 
-	// readonly
 	out, err = call("DescribeReadOnlyGroups", base)
 	record("DescribeReadOnlyGroups", out, err)
 
@@ -229,7 +223,56 @@ func main() {
 	}
 }
 
-// extractFirst 从 JSON 文本里粗略提取第一个字段值（仅用于验证脚本内部串联参数，非生产代码）
+func newMCPClient(mode, url, stdioCommand string) (*client.Client, error) {
+	switch mode {
+	case "sse":
+		return client.NewSSEMCPClient(url, security.MCPClientOptionsFromEnv()...)
+	case "stdio":
+		if strings.TrimSpace(stdioCommand) == "" {
+			return nil, fmt.Errorf("missing stdio command: set VERIFY_STDIO_COMMAND or pass --command")
+		}
+		return client.NewStdioMCPClient(strings.TrimSpace(stdioCommand), ensureTransportEnv(os.Environ(), "stdio"))
+	default:
+		return client.NewStreamableHttpClient(url, security.MCPStreamableHTTPClientOptionsFromEnv()...)
+	}
+}
+
+func defaultURL(mode, primaryKey, legacyKey string) string {
+	if v := envOrDefault(primaryKey, ""); v != "" {
+		return v
+	}
+	if v := envOrDefault(legacyKey, ""); v != "" {
+		return v
+	}
+	if mode == "sse" {
+		return "http://127.0.0.1:9000/sse"
+	}
+	return "http://127.0.0.1:9000/mcp"
+}
+
+func normalizeTransport(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "sse":
+		return "sse"
+	case "stdio":
+		return "stdio"
+	default:
+		return "streamable-http"
+	}
+}
+
+func ensureTransportEnv(env []string, mode string) []string {
+	result := append([]string(nil), env...)
+	prefix := "MCP_TRANSPORT="
+	for i, item := range result {
+		if strings.HasPrefix(item, prefix) {
+			result[i] = prefix + mode
+			return result
+		}
+	}
+	return append(result, prefix+mode)
+}
+
 func extractFirst(jsonText string, field string) string {
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonText), &raw); err != nil {
@@ -264,41 +307,32 @@ func extractInstanceField(jsonText, instanceID, field string) string {
 	if !ok {
 		return ""
 	}
-	instances, ok := resp["DBInstanceSet"].([]interface{})
+	set, ok := resp["DBInstanceSet"].([]interface{})
 	if !ok {
 		return ""
 	}
-	for _, item := range instances {
+	for _, item := range set {
 		instance, ok := item.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if instanceID != "" && stringValue(instance["DBInstanceId"]) != instanceID {
+		if id, _ := instance["DBInstanceId"].(string); id != instanceID {
 			continue
 		}
-		return stringValue(instance[field])
+		if value, _ := instance[field].(string); value != "" {
+			return value
+		}
+		if nested, ok := instance[field].(map[string]interface{}); ok {
+			if name, _ := nested["Zone"].(string); name != "" {
+				return name
+			}
+		}
 	}
 	return ""
 }
 
-func stringValue(v interface{}) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case fmt.Stringer:
-		return x.String()
-	case float64:
-		if x == float64(int64(x)) {
-			return fmt.Sprintf("%d", int64(x))
-		}
-		return fmt.Sprintf("%v", x)
-	default:
-		return ""
-	}
-}
-
 func envOrDefault(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback

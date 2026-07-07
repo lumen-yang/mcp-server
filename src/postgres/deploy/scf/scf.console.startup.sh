@@ -3,6 +3,7 @@ set -euo pipefail
 
 export PG_MCP_RUNTIME="${PG_MCP_RUNTIME:-scf}"
 export PORT="${PORT:-9000}"
+export MCP_TRANSPORT="${MCP_TRANSPORT:-streamable-http}"
 export MCP_SERVER_BIND_HOST="${MCP_SERVER_BIND_HOST:-0.0.0.0}"
 export MCP_SERVER_PORT="${MCP_SERVER_PORT:-${PORT}}"
 export MCP_SERVER_HTTP_ENDPOINT="${MCP_SERVER_HTTP_ENDPOINT:-/mcp}"

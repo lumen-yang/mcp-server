@@ -17,6 +17,7 @@ RUN apk add --no-cache ca-certificates && \
     mkdir -p /app/data && chown -R app:app /app
 
 WORKDIR /app
+ENV MCP_TRANSPORT=streamable-http
 COPY --from=builder /out/postgres-server /app/postgres-server
 
 USER app

@@ -16,14 +16,25 @@ import (
 )
 
 func main() {
-	url := flag.String("url", envOrDefault("SMOKE_SERVER_URL", envOrDefault("SMOKE_SSE_URL", "http://127.0.0.1:9000/mcp")), "MCP streamable-http URL")
+	transportMode := flag.String("transport", normalizeTransport(envOrDefault("SMOKE_TRANSPORT", envOrDefault("MCP_TRANSPORT", "streamable-http"))), "transport: streamable-http | sse | stdio")
+	url := flag.String("url", defaultURL(*transportMode, "SMOKE_SERVER_URL", "SMOKE_SSE_URL"), "MCP URL for HTTP/SSE transports")
+	stdioCommand := flag.String("command", envOrDefault("SMOKE_STDIO_COMMAND", ""), "stdio command path")
 	region := flag.String("region", envOrDefault("SMOKE_REGION", "ap-guangzhou"), "region for readonly tool calls")
 	instanceID := flag.String("instance-id", envOrDefault("SMOKE_INSTANCE_ID", ""), "instance id for instance-scoped readonly tool calls")
 	listLimit := flag.Int("list-limit", envOrDefaultInt("SMOKE_LIST_LIMIT", 12), "max tool names to print from tools/list")
 	flag.Parse()
 
+	mode := normalizeTransport(*transportMode)
+	*transportMode = mode
+
 	fmt.Println("== MCP smoke test ==")
-	fmt.Printf("Server URL: %s\n", *url)
+	fmt.Printf("Transport: %s\n", mode)
+	switch mode {
+	case "stdio":
+		fmt.Printf("Command: %s\n", *stdioCommand)
+	default:
+		fmt.Printf("Server URL: %s\n", *url)
+	}
 	fmt.Printf("Region: %s\n", *region)
 	if *instanceID == "" {
 		fmt.Println("InstanceID: <not set>")
@@ -33,8 +44,8 @@ func main() {
 	}
 	fmt.Println()
 
-	c, err := client.NewStreamableHttpClient(*url, security.MCPStreamableHTTPClientOptionsFromEnv()...)
-	must("create streamable-http client", err)
+	c, err := newMCPClient(mode, *url, *stdioCommand)
+	must("create MCP client", err)
 
 	ctx := context.Background()
 	must("start client", c.Start(ctx))
@@ -122,6 +133,56 @@ func main() {
 		fmt.Println()
 	}
 	callAndPrint(ctx, c, "postgres-CreateInstances", map[string]any{"region": *region, "confirm": false})
+}
+
+func newMCPClient(mode, url, stdioCommand string) (*client.Client, error) {
+	switch mode {
+	case "sse":
+		return client.NewSSEMCPClient(url, security.MCPClientOptionsFromEnv()...)
+	case "stdio":
+		if strings.TrimSpace(stdioCommand) == "" {
+			return nil, fmt.Errorf("missing stdio command: set SMOKE_STDIO_COMMAND or pass --command")
+		}
+		return client.NewStdioMCPClient(strings.TrimSpace(stdioCommand), ensureTransportEnv(os.Environ(), "stdio"))
+	default:
+		return client.NewStreamableHttpClient(url, security.MCPStreamableHTTPClientOptionsFromEnv()...)
+	}
+}
+
+func defaultURL(mode, primaryKey, legacyKey string) string {
+	if v := envOrDefault(primaryKey, ""); v != "" {
+		return v
+	}
+	if v := envOrDefault(legacyKey, ""); v != "" {
+		return v
+	}
+	if mode == "sse" {
+		return "http://127.0.0.1:9000/sse"
+	}
+	return "http://127.0.0.1:9000/mcp"
+}
+
+func normalizeTransport(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "sse":
+		return "sse"
+	case "stdio":
+		return "stdio"
+	default:
+		return "streamable-http"
+	}
+}
+
+func ensureTransportEnv(env []string, mode string) []string {
+	result := append([]string(nil), env...)
+	prefix := "MCP_TRANSPORT="
+	for i, item := range result {
+		if strings.HasPrefix(item, prefix) {
+			result[i] = prefix + mode
+			return result
+		}
+	}
+	return append(result, prefix+mode)
 }
 
 func callAndPrint(ctx context.Context, c *client.Client, toolName string, args map[string]any) {

@@ -2,6 +2,7 @@
 # MCP 协议级 smoke test：启动本地 server，并用真实 MCP 客户端完成 initialize/tools/list/tools/call。
 # 用法：在 src/postgres 目录下执行 ./scripts/run_mcp_smoke.sh
 # 可选环境变量：
+#   SMOKE_TRANSPORT=streamable-http|sse|stdio
 #   SMOKE_REGION=ap-guangzhou
 #   SMOKE_INSTANCE_ID=postgres-xxxxxxxx
 #   SMOKE_LIST_LIMIT=12
@@ -38,6 +39,15 @@ s.close()
 PY
 }
 
+normalize_transport() {
+  local value="${1:-streamable-http}"
+  case "${value}" in
+    http|streamable_http|streamablehttp) printf 'streamable-http' ;;
+    streamable-http|sse|stdio) printf '%s' "${value}" ;;
+    *) printf 'streamable-http' ;;
+  esac
+}
+
 if [[ ! -f "${PROJECT_DIR}/.env" ]]; then
   echo "错误：未找到 ${PROJECT_DIR}/.env，请先配置真实密钥后再运行。" >&2
   exit 1
@@ -56,27 +66,53 @@ case "$(uname -m)" in
   *) HOST_GOARCH="$(uname -m)" ;;
 esac
 
+echo "==> 编译 server 与 smoke client（目标平台: ${HOST_GOOS}/${HOST_GOARCH}）..."
+GOOS="${HOST_GOOS}" GOARCH="${HOST_GOARCH}" go build -o "${SERVER_BIN}" .
+GOOS="${HOST_GOOS}" GOARCH="${HOST_GOARCH}" go build -o "${SMOKE_BIN}" ./cmd/mcp_smoke
+
+echo "==> 加载 .env ..."
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
+
+SMOKE_TRANSPORT="$(normalize_transport "${SMOKE_TRANSPORT:-${MCP_TRANSPORT:-streamable-http}}")"
 SMOKE_REGION="${SMOKE_REGION:-ap-guangzhou}"
 SMOKE_INSTANCE_ID="${SMOKE_INSTANCE_ID:-}"
 SMOKE_LIST_LIMIT="${SMOKE_LIST_LIMIT:-12}"
+
+if [[ "${SMOKE_TRANSPORT}" == "stdio" ]]; then
+  echo "==> 以 stdio transport 运行 smoke client..."
+  SMOKE_TRANSPORT="stdio" \
+  SMOKE_STDIO_COMMAND="${SERVER_BIN}" \
+  MCP_TRANSPORT="stdio" \
+  SMOKE_REGION="${SMOKE_REGION}" \
+  SMOKE_INSTANCE_ID="${SMOKE_INSTANCE_ID}" \
+  SMOKE_LIST_LIMIT="${SMOKE_LIST_LIMIT}" \
+  "${SMOKE_BIN}"
+  echo ""
+  echo "==> MCP smoke test 完成。"
+  exit 0
+fi
+
 if [[ -z "${SMOKE_SERVER_PORT:-}" ]]; then
   SMOKE_SERVER_PORT="$(pick_free_port)"
 else
   SMOKE_SERVER_PORT="${SMOKE_SERVER_PORT}"
 fi
-SMOKE_HTTP_ENDPOINT="${MCP_SERVER_HTTP_ENDPOINT:-${MCP_SERVER_SSE_ENDPOINT:-/mcp}}"
-SMOKE_SERVER_URL="${SMOKE_SERVER_URL:-${SMOKE_SSE_URL:-http://127.0.0.1:${SMOKE_SERVER_PORT}${SMOKE_HTTP_ENDPOINT}}}"
 
-echo "==> 编译 server 与 smoke client（目标平台: ${HOST_GOOS}/${HOST_GOARCH}）..."
-GOOS="${HOST_GOOS}" GOARCH="${HOST_GOARCH}" go build -o "${SERVER_BIN}" .
-GOOS="${HOST_GOOS}" GOARCH="${HOST_GOARCH}" go build -o "${SMOKE_BIN}" ./cmd/mcp_smoke
+case "${SMOKE_TRANSPORT}" in
+  sse)
+    SMOKE_ENDPOINT="${MCP_SERVER_SSE_ENDPOINT:-/sse}"
+    ;;
+  *)
+    SMOKE_ENDPOINT="${MCP_SERVER_HTTP_ENDPOINT:-/mcp}"
+    ;;
+esac
+SMOKE_SERVER_URL="${SMOKE_SERVER_URL:-${SMOKE_SSE_URL:-http://127.0.0.1:${SMOKE_SERVER_PORT}${SMOKE_ENDPOINT}}}"
 
-echo "==> 加载 .env 并启动本地 server..."
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
-MCP_SERVER_PORT="${SMOKE_SERVER_PORT}" "${SERVER_BIN}" > "${LOG_FILE}" 2>&1 &
+echo "==> 启动本地 ${SMOKE_TRANSPORT} server..."
+MCP_TRANSPORT="${SMOKE_TRANSPORT}" MCP_SERVER_PORT="${SMOKE_SERVER_PORT}" "${SERVER_BIN}" > "${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
 
 READY=0
@@ -101,6 +137,7 @@ if [[ "${READY}" != "1" ]] || ! kill -0 "${SERVER_PID}" 2>/dev/null; then
 fi
 
 echo "==> 运行 MCP smoke client..."
+SMOKE_TRANSPORT="${SMOKE_TRANSPORT}" \
 SMOKE_REGION="${SMOKE_REGION}" \
 SMOKE_INSTANCE_ID="${SMOKE_INSTANCE_ID}" \
 SMOKE_SERVER_URL="${SMOKE_SERVER_URL}" \
