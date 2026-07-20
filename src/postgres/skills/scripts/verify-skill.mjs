@@ -110,7 +110,7 @@ function main() {
     verifySkill(skillName);
     console.log(`verified ${skillName}`);
   }
-  console.log(`all ${SKILLS.length} PostgreSQL companion skills verified`);
+  console.log(`all ${SKILLS.length} PostgreSQL standalone skills verified`);
 }
 
 main();

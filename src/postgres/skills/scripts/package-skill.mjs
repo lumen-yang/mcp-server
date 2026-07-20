@@ -11,9 +11,11 @@ export const SKILLS_ROOT = path.resolve(__dirname, '..');
 export const DIST_DIR = path.join(SKILLS_ROOT, 'dist');
 export const COMMON_REFERENCES_DIR = path.join(SKILLS_ROOT, 'references', 'common');
 export const SKILLS = [
+  'tencent-pg-management',
+  'tencent-pg-mem0-deploy',
+  'tencent-pg-rest-deploy',
   'tencent-pg-inspection',
   'tencent-pg-slowquery-diagnosis',
-  'tencent-pg-ops-troubleshooter',
 ];
 
 function parseArgs(argv) {

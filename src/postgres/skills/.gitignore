@@ -2,3 +2,4 @@ dist/
 node_modules/
 .DS_Store
 tests/
+tencent-pg-ops-troubleshooter/references/execution_flow.md

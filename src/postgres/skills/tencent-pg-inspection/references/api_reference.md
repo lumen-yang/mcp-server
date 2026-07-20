@@ -1,130 +1,86 @@
-# Inspection OpenAPI reference
+# Inspection monitor API reference
 
 ## Scope
 
-This checklist is for PostgreSQL inspection and aligned follow-up operations by calling Tencent Cloud PostgreSQL OpenAPI directly.
+This reference is only for the simplified PostgreSQL inspection skill.
 
-The allowed Action names in this file are the full set of 48 actions currently aligned with the PostgreSQL MCP implementation in `src/postgres/tools/openapi_alignment.go`.
+The goal is to collect a small set of monitor facts and return a stable inspection result with minimal branching.
 
-## Direct OpenAPI baseline
+## Preferred monitor actions
 
-- Endpoint: `https://postgres.tencentcloudapi.com`
-- Version: `2017-03-12`
-- Auth: `TC3-HMAC-SHA256`
-- Credentials: prefer `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY`, `TENCENTCLOUD_REGION`, and optional `TENCENTCLOUD_SESSION_TOKEN`; also accept compatible names such as `MCP_REQUEST_SECRET_ID`, `MCP_REQUEST_SECRET_KEY`, `MCP_REQUEST_SESSION_TOKEN`, `MCP_SECRET_ID`, and `MCP_SECRET_KEY`
-- Region input: accept canonical region codes such as `ap-guangzhou` and common aliases such as `广州`, `上海`, `成都`, `北京`, then normalize before the first OpenAPI call
-- Preferred call path: official Tencent Cloud SDK; fallback: locally generated TC3-signed HTTPS request, and SDK absence alone should not be treated as the first blocking error
-- Never put secrets into URLs or query parameters, and never hardcode them in source code or skill files
+Use the Tencent Cloud monitor API actions below:
 
-## Allowed OpenAPI actions (all 48 aligned with current MCP server)
+- `DescribeProductList`: confirm the monitor product when needed
+- `DescribeBaseMetrics`: discover which PostgreSQL metrics are supported
+- `GetMonitorData`: fetch monitor data for the target metric
+- `DescribeStatisticData`: fetch monitor data with dimension filtering when needed
 
-### 1. Instance management
-- `DescribeDBInstances`
-- `DescribeDBInstanceAttribute`
-- `CreateInstances` (fee-impacting, explicit confirmation required)
-- `ModifyDBInstanceName` (explicit confirmation required)
-- `ModifyDBInstanceSpec` (fee-impacting, explicit confirmation required)
-- `RestartDBInstance` (explicit confirmation required)
-- `IsolateDBInstances` (explicit confirmation required)
-- `DisIsolateDBInstances` (explicit confirmation required)
-- `UpgradeDBInstanceKernelVersion` (explicit confirmation required)
-- `DescribeTasks`
-- `DescribeClasses`
-- `DescribeDBVersions`
-- `DescribeRegions`
-- `DescribeZones`
-- `DescribeProductConfig`
+## Fixed inspection workflow
 
-### 2. Account management
-- `DescribeAccounts`
-- `DescribeAccountPrivileges`
-- `CreateAccount` (explicit confirmation required)
-- `DeleteAccount` (explicit confirmation required)
-- `ModifyAccountPrivileges` (explicit confirmation required)
-- `ResetAccountPassword` (explicit confirmation required)
+1. Confirm region, instance ID, and optional time window.
+2. Normalize the region.
+3. Use `DescribeBaseMetrics` first to confirm which PostgreSQL metrics are available.
+4. Pull only the fixed inspection metrics that are actually supported.
+5. Return results in a stable output format without expanding the workflow.
 
-### 3. Database management
-- `DescribeDatabases`
-- `DescribeDatabaseObjects`
-- `CreateDatabase` (explicit confirmation required)
-- `ModifyDatabaseOwner` (explicit confirmation required)
+## Recommended metric set
 
-### 4. Parameter management
-- `DescribeDBInstanceParameters`
-- `DescribeParameterTemplates`
-- `DescribeParameterTemplateAttributes`
-- `DescribeParamsEvent`
-- `ModifyDBInstanceParameters` (critical change, explicit confirmation required)
+The skill should prefer the following basic metrics when they are available:
 
-### 5. Backup and recovery
-- `DescribeBackupOverview`
-- `DescribeBaseBackups`
-- `DescribeLogBackups`
-- `DescribeAvailableRecoveryTime`
-- `DescribeCloneDBInstanceSpec`
-- `DescribeBackupDownloadURL` (explicit confirmation required)
-- `CreateBaseBackup` (explicit confirmation required)
-- `CloneDBInstance` (fee-impacting, explicit confirmation required)
+- CPU usage
+- memory usage
+- storage usage or remaining storage
+- connection count
+- disk I/O related metric
+- replication delay
 
-### 6. Monitoring and diagnostics
-- `DescribeSlowQueryList`
-- `DescribeSlowQueryAnalysis`
-- `DescribeDBErrlogs`
-
-### 7. Network management
-- `OpenDBExtranetAccess` (explicit confirmation required)
-- `CloseDBExtranetAccess` (explicit confirmation required)
-- `DescribeDBInstanceSecurityGroups`
-- `ModifyDBInstanceSecurityGroups` (explicit confirmation required)
-
-### 8. SSL configuration
-- `DescribeDBInstanceSSLConfig`
-
-### 9. Read-only instances
-- `DescribeReadOnlyGroups`
-- `CreateReadOnlyDBInstance` (fee-impacting, explicit confirmation required)
-
-## Inspection sequence
-
-1. Normalize the region first by following `@references/common/region_normalization.md`, then confirm the target instance.
-2. Prefer read-only evidence collection first: instance, backup, network, SSL, replica, slow-query, and error-log context.
-3. Add broader module checks only when the first-pass evidence is insufficient.
-4. If the user asks for remediation or the inspection uncovers a concrete issue, select the smallest aligned action that can address it.
-5. Before any audit, business, fee-impacting, or critical action, explain impact, target scope, and confirmation requirement first.
-6. Summarize the result before and after any confirmed action.
+If a metric is not supported by the monitor API for the current target, return `unsupported` instead of guessing.
 
 ## Output schema
 
-### 1. Overall status
+### 1. Executive summary
+- overall inspection status: `normal` / `attention` / `abnormal` / `manual review needed`
+- 2-4 key findings written as short operations-report bullets
+- summary counts when useful, such as how many metrics are `available`, `unsupported`, or `no-data`
+
+### 2. Inspection target
 - Region
-- Instance
-- Risk level: `low` / `medium` / `high`
-- Short conclusion
+- Instance ID
+- Time window
+- monitor actions used
 
-### 2. Evidence snapshot
-- Lifecycle / status
-- Backup evidence
-- Network / SSL evidence
-- Replica evidence
-- Optional anomaly evidence
+### 3. Health snapshot
+For each major metric area include a short line with:
+- metric area or metric name
+- latest value or summarized value
+- unit if available
+- observation label: `normal` / `attention` / `abnormal` / `manual review needed`
+- short fact-only note
 
-### 3. Risk items
-For each risk item include:
-- symptom
-- evidence
-- impact
-- confidence
+### 4. Metric details
+For each metric include:
+- metric name
+- latest value or summarized value
+- unit if available
+- data status: `available` / `unsupported` / `no-data`
+- optional note if the API returns partial data only
 
-### 4. Next actions
-- `no action required`, or
-- ordered low-risk follow-up checks and owner suggestions, or
-- aligned remediation actions with confirmation requirement clearly stated
+### 5. Risk and manual review items
+Only include items that are directly supported by metric status or returned values, such as:
+- metrics in `attention` or `abnormal`
+- unsupported critical metrics
+- `no-data` areas that limit confidence
+
+### 6. Data notes
+- unsupported metrics list
+- no-data metrics list
+- whether the result is a point-in-time view or a summarized window view
+
+If a metric cannot be safely judged, use `manual review needed`.
 
 ## Guardrails
 
-- You may use any aligned action above, but only when it is relevant to the current inspection goal.
-- Never call any Action outside the aligned list above.
-- Start with evidence collection before write, fee-impacting, or high-risk actions.
-- For audit, business, fee-impacting, or critical actions, explicit confirmation is required.
-- Separate evidence from inference.
-- If the aligned actions do not expose a requested metric or detail, say so explicitly.
+- Do not use PostgreSQL management actions in this skill.
+- Do not output remediation actions.
+- Do not correlate metrics into root-cause conclusions.
+- Do not fabricate thresholds, values, or unavailable metrics.
